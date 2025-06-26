@@ -32,6 +32,7 @@ dependencies = [
     "mujoco-mjx>=3.2.7",
     "mujoco>=3.2.7",
     "tqdm",
+    "mediapy>=1.2.4",
 ]
 keywords = ["mjx", "mujoco", "sim2real", "reinforcement learning"]
 
