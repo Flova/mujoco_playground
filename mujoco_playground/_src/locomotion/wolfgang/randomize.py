@@ -51,6 +51,14 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
     )
     dof_damping = model.dof_damping.at[6:].set(damping)
 
+    # Scale actuator gains: *U(0.2, 5.0).
+    rng, key = jax.random.split(rng)
+    noise = jax.random.uniform(
+        key, shape=(12,), minval=0.5, maxval=5.0
+    )
+    actuator_gain = model.actuator_gainprm.at[:, 0].set(model.actuator_gainprm[:, 0] * noise)
+    actuator_bias = model.actuator_biasprm.at[:, 1].set(model.actuator_biasprm[:, 1] * noise)
+
     # Scale all link masses: *U(0.9, 1.1).
     rng, key = jax.random.split(rng)
     dmass = jax.random.uniform(
@@ -96,6 +104,8 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
         dof_frictionloss,
         dof_armature,
         dof_damping,
+        actuator_gain,
+        actuator_bias,
         body_mass,
         body_com,
         qpos0,
@@ -106,6 +116,8 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
       frictionloss,
       armature,
       damping,
+      actuator_gain,
+      actuator_bias,
       body_mass,
       body_com,
       qpos0,
@@ -117,6 +129,8 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
       "dof_frictionloss": 0,
       "dof_armature": 0,
       "dof_damping": 0,
+      "actuator_gainprm": 0,
+      "actuator_biasprm": 0,
       "body_mass": 0,
       "body_ipos": 0,
       "qpos0": 0,
@@ -127,6 +141,8 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
       "dof_frictionloss": frictionloss,
       "dof_armature": armature,
       "dof_damping": damping,
+      "actuator_gainprm": actuator_gain,
+      "actuator_biasprm": actuator_bias,
       "body_mass": body_mass,
       "body_ipos": body_com,
       "qpos0": qpos0,
