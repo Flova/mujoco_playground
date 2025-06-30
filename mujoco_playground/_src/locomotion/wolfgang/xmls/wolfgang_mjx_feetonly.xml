@@ -8,7 +8,7 @@
   <default>
     <default class="humanoid">
       <default class="collision">
-        <geom group="3" contype="1" conaffinity="1" /> 
+        <geom group="3" contype="1" conaffinity="1" />
       </default>
       <default class="visual">
         <geom material="black" contype="0" conaffinity="0" group="2" />
@@ -40,6 +40,7 @@
       <site name="imu"/>
       <camera name="front" pos="1.210 -0.435 0.32" xyaxes="0.342 0.940 0.000 -0.321 0.117 0.940" mode="trackcom"/>
       <camera name="track" pos="0.805 -1.105 0.2" xyaxes="0.814 0.580 0.000 -0.140 0.196 0.971" mode="trackcom"/>
+      <inertial pos="-0.00564376 -0.0026297 0.109553" quat="0.997756 0.00472747 0.0649963 -0.0153334" mass="3.0839" diaginertia="0.0185762 0.0158759 0.00761796"/>
       <geom size="0.0201 0.0205 0.03055" pos="0.01605 0.053 0.2035" quat="9.38184e-07 -0.707105 9.38187e-07 0.707108" type="box" rgba="0.647059 0.647059 0.647059 1" class="visual" />
       <geom size="0.0201 0.0205 0.03055" pos="0.01605 -0.053 0.2035" quat="0.707105 0 -0.707108 0" type="box" rgba="0.647059 0.647059 0.647059 1" class="visual" />
       <geom size="0.0095 0.0365 0.0065" pos="-0.0635 0.0675 0.177415" quat="0.499998 -0.5 -0.500002 0.5" type="box" rgba="0.647059 0.647059 0.647059 1" class="visual" />
