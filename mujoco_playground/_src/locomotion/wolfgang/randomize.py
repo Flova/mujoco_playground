@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Domain randomization for the Berkeley Humanoid environment."""
+"""Domain randomization for the Wolfgang environment."""
 
 import jax
 from mujoco import mjx
@@ -44,6 +44,13 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
     )
     dof_armature = model.dof_armature.at[6:].set(armature)
 
+    # Scale damping: *U(0.95, 1.05).
+    rng, key = jax.random.split(rng)
+    damping = model.dof_damping[6:] * jax.random.uniform(
+        key, shape=(12,), minval=0.95, maxval=1.05
+    )
+    dof_damping = model.dof_damping.at[6:].set(damping)
+
     # Scale all link masses: *U(0.9, 1.1).
     rng, key = jax.random.split(rng)
     dmass = jax.random.uniform(
@@ -58,6 +65,24 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
         body_mass[TORSO_BODY_ID] + dmass
     )
 
+    # Randomize com of torso: +U(-0.07, 0.07).
+    rng, key = jax.random.split(rng)
+    com_offset = jax.random.uniform(
+        key, shape=(3,), minval=-0.07, maxval=0.07
+    )
+    body_com = model.body_ipos.at[TORSO_BODY_ID].set(
+        model.body_ipos[TORSO_BODY_ID] + com_offset
+    )
+
+    # Randomize all coms: +U(-0.01, 0.01).
+    rng, key = jax.random.split(rng)
+    com_offset = jax.random.uniform(
+        key, shape=(model.nbody, 3), minval=-0.01, maxval=0.01
+    )
+    body_com = body_com.at[:].set(
+        body_com + com_offset
+    )
+
     # Jitter qpos0: +U(-0.05, 0.05).
     rng, key = jax.random.split(rng)
     qpos0 = model.qpos0
@@ -70,7 +95,9 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
         geom_friction,
         dof_frictionloss,
         dof_armature,
+        dof_damping,
         body_mass,
+        body_com,
         qpos0,
     )
 
@@ -78,7 +105,9 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
       friction,
       frictionloss,
       armature,
+      damping,
       body_mass,
+      body_com,
       qpos0,
   ) = rand_dynamics(rng)
 
@@ -87,7 +116,9 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
       "geom_friction": 0,
       "dof_frictionloss": 0,
       "dof_armature": 0,
+      "dof_damping": 0,
       "body_mass": 0,
+      "body_ipos": 0,
       "qpos0": 0,
   })
 
@@ -95,7 +126,9 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
       "geom_friction": friction,
       "dof_frictionloss": frictionloss,
       "dof_armature": armature,
+      "dof_damping": damping,
       "body_mass": body_mass,
+      "body_ipos": body_com,
       "qpos0": qpos0,
   })
 

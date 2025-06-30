@@ -46,7 +46,7 @@ def default_config() -> config_dict.ConfigDict:
               kfe_pos=0.05,
               ffe_pos=0.08,
               faa_pos=0.03,
-              joint_vel=1.5,  # rad/s
+              joint_vel=0.2,  # rad/s
               gravity=0.05,
               linvel=0.1,
               gyro=0.2,  # angvel.
@@ -65,7 +65,7 @@ def default_config() -> config_dict.ConfigDict:
               # Energy related rewards.
               torques=-2.5e-5,
               action_rate=-0.01,
-              energy=0.0,
+              energy=-1.e-3,
               # Feet related rewards.
               feet_clearance=0.0,
               feet_air_time=2.0,
@@ -89,11 +89,11 @@ def default_config() -> config_dict.ConfigDict:
       push_config=config_dict.create(
           enable=True,
           interval_range=[5.0, 10.0],
-          magnitude_range=[0.1, 2.0],
+          magnitude_range=[0.05, 0.8],
       ),
       lin_vel_x=[-0.5, 0.5],
       lin_vel_y=[-0.5, 0.5],
-      ang_vel_yaw=[-1.0, 1.0],
+      ang_vel_yaw=[-1.5, 1.5],
   )
 
 
@@ -347,7 +347,7 @@ class Joystick(wolfgang_base.WolfgangEnv):
     info["rng"], noise_rng = jax.random.split(info["rng"])
     noisy_gyro = (
         gyro
-        + (2 * jax.random.uniform(noise_rng, shape=gyro.shape) - 1)
+        + jax.random.normal(noise_rng, shape=gyro.shape)
         * self._config.noise_config.level
         * self._config.noise_config.scales.gyro
     )
@@ -356,7 +356,7 @@ class Joystick(wolfgang_base.WolfgangEnv):
     info["rng"], noise_rng = jax.random.split(info["rng"])
     noisy_gravity = (
         gravity
-        + (2 * jax.random.uniform(noise_rng, shape=gravity.shape) - 1)
+        + jax.random.normal(noise_rng, shape=gravity.shape)
         * self._config.noise_config.level
         * self._config.noise_config.scales.gravity
     )
@@ -374,7 +374,7 @@ class Joystick(wolfgang_base.WolfgangEnv):
     info["rng"], noise_rng = jax.random.split(info["rng"])
     noisy_joint_vel = (
         joint_vel
-        + (2 * jax.random.uniform(noise_rng, shape=joint_vel.shape) - 1)
+        + jax.random.normal(noise_rng, shape=joint_vel.shape)
         * self._config.noise_config.level
         * self._config.noise_config.scales.joint_vel
     )
@@ -393,7 +393,6 @@ class Joystick(wolfgang_base.WolfgangEnv):
     )
 
     state = jp.hstack([
-        noisy_linvel,  # 3
         noisy_gyro,  # 3
         noisy_gravity,  # 3
         info["command"],  # 3
