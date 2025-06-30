@@ -69,12 +69,12 @@ class OnnxController:
     gyro = data.sensor("gyro").data
     imu_xmat = data.site_xmat[model.site("imu").id].reshape(3, 3)
     gravity = imu_xmat.T @ np.array([0, 0, -1])
+
     joint_angles = data.qpos[7:] - self._default_angles
     joint_velocities = data.qvel[6:]
     phase = np.concatenate([np.cos(self._phase), np.sin(self._phase)])
     command = self._joystick.get_command()
     obs = np.hstack([
-        linvel,
         gyro,
         gravity,
         command,
@@ -104,6 +104,7 @@ def load_callback(model=None, data=None):
       wolfgang_constants.FEET_ONLY_FLAT_TERRAIN_XML.as_posix(),
       assets=get_assets(),
   )
+
   data = mujoco.MjData(model)
 
   mujoco.mj_resetDataKeyframe(model, data, 1)
