@@ -33,6 +33,9 @@ dependencies = [
     "mujoco>=3.2.7",
     "tqdm",
     "mediapy>=1.2.4",
+    "wandb>=0.20.1",
+    "tf2onnx>=1.16.1",
+    "tensorflow>=2.19.0",
     "onnxruntime>=1.22.0",
 ]
 keywords = ["mjx", "mujoco", "sim2real", "reinforcement learning"]
