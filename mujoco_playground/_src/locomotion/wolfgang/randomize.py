@@ -54,7 +54,7 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
     # Scale actuator gains: *U(0.2, 5.0).
     rng, key = jax.random.split(rng)
     noise = jax.random.uniform(
-        key, shape=(12,), minval=0.5, maxval=5.0
+        key, shape=(12,), minval=0.9, maxval=2.0
     )
     actuator_gain = model.actuator_gainprm.at[:, 0].set(model.actuator_gainprm[:, 0] * noise)
     actuator_bias = model.actuator_biasprm.at[:, 1].set(model.actuator_biasprm[:, 1] * noise)
