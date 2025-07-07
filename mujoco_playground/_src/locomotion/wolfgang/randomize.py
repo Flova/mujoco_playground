@@ -32,24 +32,24 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
 
     # Scale static friction: *U(0.9, 1.1).
     rng, key = jax.random.split(rng)
-    frictionloss = model.dof_frictionloss[6:] * jax.random.uniform(
+    frictionloss = model.dof_frictionloss[6:18] * jax.random.uniform(
         key, shape=(12,), minval=0.9, maxval=1.1
     )
-    dof_frictionloss = model.dof_frictionloss.at[6:].set(frictionloss)
+    dof_frictionloss = model.dof_frictionloss.at[6:18].set(frictionloss)
 
     # Scale armature: *U(1.0, 1.05).
     rng, key = jax.random.split(rng)
-    armature = model.dof_armature[6:] * jax.random.uniform(
+    armature = model.dof_armature[6:18] * jax.random.uniform(
         key, shape=(12,), minval=1.0, maxval=1.05
     )
-    dof_armature = model.dof_armature.at[6:].set(armature)
+    dof_armature = model.dof_armature.at[6:18].set(armature)
 
     # Scale damping: *U(0.95, 1.05).
     rng, key = jax.random.split(rng)
-    damping = model.dof_damping[6:] * jax.random.uniform(
+    damping = model.dof_damping[6:18] * jax.random.uniform(
         key, shape=(12,), minval=0.95, maxval=1.05
     )
-    dof_damping = model.dof_damping.at[6:].set(damping)
+    dof_damping = model.dof_damping.at[6:18].set(damping)
 
     # Scale actuator gains: *U(0.2, 5.0).
     rng, key = jax.random.split(rng)
@@ -94,8 +94,8 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
     # Jitter qpos0: +U(-0.05, 0.05).
     rng, key = jax.random.split(rng)
     qpos0 = model.qpos0
-    qpos0 = qpos0.at[7:].set(
-        qpos0[7:]
+    qpos0 = qpos0.at[7:19].set(
+        qpos0[7:19]
         + jax.random.uniform(key, shape=(12,), minval=-0.05, maxval=0.05)
     )
 
