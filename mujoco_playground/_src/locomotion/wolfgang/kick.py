@@ -57,12 +57,14 @@ def default_config() -> config_dict.ConfigDict:
           scales=config_dict.create(
               # Kick related rewards.
               lin_vel_x=0.4,
-              orient_to_ball=0.2,
-              ball_proximity=0.2,
+              stop_for_kick=0.5,
+              orient_to_ball=0.25,
+              ball_proximity=0.1,
               ball_height=0.0,
-              ball_travel=0.0,
-              ball_speed=1.0,
+              ball_travel=0.2,
+              ball_speed=0.0,
               kick_foot_velocity=0.0,
+              kick_motion=10.0,
               # Base related rewards.
               lin_vel_z=0.0,
               ang_vel_xy=-0.15,
@@ -97,7 +99,7 @@ def default_config() -> config_dict.ConfigDict:
           interval_range=[5.0, 10.0],
           magnitude_range=[0.05, 0.8],
       ),
-      ball_distance=[0.5, 2.0],
+      ball_distance=[0.5, 1.0],
   )
 
 
@@ -204,7 +206,7 @@ class Kick(wolfgang_base.WolfgangEnv):
     qpos = qpos.at[3:7].set(new_quat)
 
     # Sample the initial ball position.
-    ball_pos = self.sample_ball_position(rng) + qpos[19:22]
+    ball_pos = self.sample_ball_position(rng, yaw[0]) + qpos[19:22]
     # Set the ball position relative to the robot position.
     qpos = qpos.at[19:22].set(ball_pos)
 
@@ -261,6 +263,8 @@ class Kick(wolfgang_base.WolfgangEnv):
         "last_contact": jp.zeros(2, dtype=bool),
         "swing_peak": jp.zeros(2),
         "initial_ball_pos": ball_pos,
+        "reached_ball": jp.zeros((), dtype=bool),
+        "steps_since_reached_ball": jp.zeros((), dtype=jp.int32),
         # Phase related.
         "phase_dt": phase_dt,
         "phase": phase,
@@ -336,6 +340,17 @@ class Kick(wolfgang_base.WolfgangEnv):
         axis=0
     )
 
+    state.info["reached_ball"] = jp.logical_or(
+        state.info["reached_ball"],
+        self.reached_ball(self._get_uv_ball_pos(data))
+    )
+
+    # If the ball is reached bump the steps since reached ball.
+    state.info["steps_since_reached_ball"] = jp.where(
+        state.info["reached_ball"],
+        state.info["steps_since_reached_ball"] + 1,
+        0,
+    )
 
     obs = self._get_obs(data, state.info, contact)
     done = self._get_termination(data)
@@ -467,6 +482,8 @@ class Kick(wolfgang_base.WolfgangEnv):
         contact,  # 2
         feet_vel,  # 4*3
         info["feet_air_time"],  # 2
+        info["reached_ball"],  # 1
+        info["steps_since_reached_ball"],  # 1
     ])
 
     return {
@@ -500,7 +517,14 @@ class Kick(wolfgang_base.WolfgangEnv):
     del metrics  # Unused.
     return {
         # Base-related rewards.
-        "lin_vel_x": self._reward_tracking_lin_vel(jp.array([0.4, 0.0, 0.0]), self.get_local_linvel(data)),
+        "lin_vel_x": self._reward_lin_vel_if_not_reached_ball(
+            info["reached_ball"],
+            self.get_local_linvel(data)
+        ),
+        "stop_for_kick": self._walk_in_place_if_reached_ball(
+            info["reached_ball"],
+            self.get_local_linvel(data),
+        ),
         "lin_vel_z": self._cost_lin_vel_z(self.get_global_linvel(data)),
         "ang_vel_xy": self._cost_ang_vel_xy(self.get_global_angvel(data)),
         "orientation": self._cost_orientation(self.get_gravity(data)),
@@ -541,7 +565,8 @@ class Kick(wolfgang_base.WolfgangEnv):
             self._get_uv_ball_pos(data)
         ),
         "ball_proximity": self._ball_proximity_reward(
-            self._get_uv_ball_pos(data)
+            self._get_uv_ball_pos(data),
+            info["reached_ball"],
         ),
         "ball_height": self._ball_height_reward(
             data.site_xpos[self._ball_site_id]
@@ -555,7 +580,12 @@ class Kick(wolfgang_base.WolfgangEnv):
         ),
         "kick_foot_velocity": self._reward_kick_feet_velocity(
             data.sensordata[self._foot_linvel_sensor_adr].ravel(),
-            self._get_uv_ball_pos(data)
+            info["reached_ball"],
+        ),
+        "kick_motion": self._reward_left_kick_motion(
+            info["reached_ball"],
+            info["steps_since_reached_ball"],
+            data.qpos[7:19],  # Joint positions.
         ),
     }
 
@@ -579,11 +609,14 @@ class Kick(wolfgang_base.WolfgangEnv):
   def _ball_proximity_reward(
       self,
       ball_uv: jax.Array,
+      reached_ball: jax.Array,
   ) -> jax.Array:
     """Reward for being close to the ball."""
     # Ball is in the local frame of the robot.
     ball_distance = jp.linalg.norm(ball_uv)
-    return jp.exp(-ball_distance)
+    reward = jp.exp(-ball_distance)
+    # If the ball is reached, the reward is 1.
+    return jp.where(reached_ball, 1.0, reward)
 
   def _ball_height_reward(
       self,
@@ -754,12 +787,86 @@ class Kick(wolfgang_base.WolfgangEnv):
   def _reward_kick_feet_velocity(
       self,
       foot_vels: jax.Array,
-      ball_uv: jax.Array
+      ball_reached: jax.Array,
   ) -> jax.Array:
     """Reward for the feet velocity during/before"""
     # The feet velocity should be in the direction of the ball.
     foot_vel_norm = jp.linalg.norm(foot_vels.reshape(-1, 3)[:, :2], axis=-1)
 
+    # Take the max of the two feet velocities.
+    foot_vel_max = jp.max(foot_vel_norm)
+
+    return jp.where(
+        ball_reached,
+        foot_vel_max,
+        0.0
+    )
+
+  def _reward_lin_vel_if_not_reached_ball(
+      self, ball_reached: jax.Array, lin_vel: jax.Array
+  ) -> jax.Array:
+    """Reward for the linear velocity if the robot has not reached the ball."""
+    return jp.where(
+        ball_reached,
+        0.0,
+        self._reward_tracking_lin_vel(jp.array([0.4, 0.0, 0.0]), lin_vel),
+    )
+
+  def _walk_in_place_if_reached_ball(
+      self, ball_reached: jax.Array, lin_vel: jax.Array
+  ) -> jax.Array:
+    """Reward for walking in place if the robot has reached the ball."""
+    return jp.where(
+        ball_reached,
+        self._reward_tracking_lin_vel(jp.array([0.0, 0.0, 0.0]), lin_vel),
+        0.0
+    )
+
+  def _reward_left_kick_motion(
+      self, ball_reached: jax.Array, steps_since_reached_ball: jax.Array, qpos: jax.Array
+  ) -> jax.Array:
+    """Reward for the right kick motion after reaching the ball."""
+    # Reward backward Hip Pitch during ball_reached (+ 0.5 seconds).
+    hip_pitch = qpos[self._hip_indices[1]][0]  # Left Hip Pitch.
+
+    transition_point = 0.5  # seconds
+    transition_point_steps = jp.round(transition_point / self.dt).astype(jp.int32)
+
+    # max hip pitch backwards
+    hip_pitch_reward = jp.where(
+        ball_reached & (steps_since_reached_ball < transition_point_steps),
+        -hip_pitch / jp.pi,  # Normalize to [-1, 1].
+        0.0
+    )
+
+    # Knee pulled back after reaching the ball.
+    knee_reward = jp.where(
+        ball_reached & (steps_since_reached_ball < transition_point_steps),
+        qpos[self._knee_indices[1]][0] / jp.pi,  # Left Knee Pitch.
+        0.0
+    )
+
+    # Max hip pitch forwards
+    hip_pitch_reward += jp.where(
+        ball_reached & (steps_since_reached_ball >= transition_point_steps) & (steps_since_reached_ball < 2 * transition_point_steps),
+        hip_pitch / jp.pi,  # Normalize to [-1, 1].
+        0.0
+    )
+
+    # Knee pushed forward after reaching the ball.
+    knee_reward += jp.where(
+        ball_reached & (steps_since_reached_ball >= transition_point_steps) & (steps_since_reached_ball < 2 * transition_point_steps),
+        -qpos[self._knee_indices[1]][0] / jp.pi,  # Left Knee Pitch.
+        0.0
+    )
+
+    return hip_pitch_reward + knee_reward
+
+
+  def reached_ball(
+      self, ball_uv: jax.Array
+  ) -> jax.Array:
+    """Check if the robot has reached the ball."""
     # Compute the distance to the ball in the local frame of the robot.
     ball_distance = jp.linalg.norm(ball_uv)
 
@@ -770,27 +877,20 @@ class Kick(wolfgang_base.WolfgangEnv):
     # The angle should be less than 45 degrees (pi/4 radians).
     angle_threshold = jp.pi / 4.0
 
-    close_to_ball = ball_distance < 0.25
+    close_to_ball = ball_distance < 0.3
     angle_condition = jp.abs(ball_angle) < angle_threshold
 
-    # Take the max of the two feet velocities.
-    foot_vel_max = jp.max(foot_vel_norm)
-
-    return jp.where(
-        close_to_ball & angle_condition,
-        foot_vel_max,
-        0.0
+    return jp.logical_and(
+        close_to_ball, angle_condition
     )
 
-  def _reward_
-
-  def sample_ball_position(self, rng: jax.Array) -> jax.Array:
+  def sample_ball_position(self, rng: jax.Array, yaw: jax.Array) -> jax.Array:
     rng1, rng2 = jax.random.split(rng, 2)
 
     ball_distance = jax.random.uniform(
         rng1, minval=self._config.ball_distance[0], maxval=self._config.ball_distance[1]
     )
-    ball_angle = jax.random.uniform(rng2, minval=0.0, maxval=2 * jp.pi)
+    ball_angle = jax.random.uniform(rng2, minval=yaw - jp.pi / 4, maxval=yaw + jp.pi / 4)
 
     ball_x = jp.cos(ball_angle) * ball_distance
     ball_y = jp.sin(ball_angle) * ball_distance
