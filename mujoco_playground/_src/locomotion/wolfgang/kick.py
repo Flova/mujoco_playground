@@ -56,15 +56,15 @@ def default_config() -> config_dict.ConfigDict:
       reward_config=config_dict.create(
           scales=config_dict.create(
               # Kick related rewards.
-              lin_vel_x=0.4,
-              stop_for_kick=0.5,
-              orient_to_ball=0.25,
-              ball_proximity=0.1,
+              lin_vel_x=0.6,
+              stop_for_kick=0.0,
+              orient_to_ball=0.5,
+              ball_proximity=0.0,
               ball_height=0.0,
-              ball_travel=0.2,
-              ball_speed=0.0,
-              kick_foot_velocity=0.0,
-              kick_motion=10.0,
+              ball_travel=0.0,
+              ball_speed=1.0,
+              kick_foot_velocity=0.1,
+              kick_motion=5.0,
               # Base related rewards.
               lin_vel_z=0.0,
               ang_vel_xy=-0.15,
@@ -87,8 +87,8 @@ def default_config() -> config_dict.ConfigDict:
               # Pose related rewards.
               joint_deviation_knee=-0.1,
               joint_deviation_hip=-0.0,
-              dof_pos_limits=-1.0,
-              pose=-1.0,
+              dof_pos_limits=0.0,
+              pose=-0.1,
           ),
           tracking_sigma=0.5,
           max_foot_height=0.1,
@@ -97,9 +97,9 @@ def default_config() -> config_dict.ConfigDict:
       push_config=config_dict.create(
           enable=True,
           interval_range=[5.0, 10.0],
-          magnitude_range=[0.05, 0.8],
+          magnitude_range=[0.05, 0.2],
       ),
-      ball_distance=[0.5, 1.0],
+      ball_distance=[0.25, 0.3],
   )
 
 
@@ -200,16 +200,17 @@ class Kick(wolfgang_base.WolfgangEnv):
     dxy = jax.random.uniform(key, (2,), minval=-0.5, maxval=0.5)
     qpos = qpos.at[0:2].set(qpos[0:2] + dxy) # TODO fix all indices
     rng, key = jax.random.split(rng)
-    yaw = jax.random.uniform(key, (1,), minval=-3.14, maxval=3.14)
+    yaw = jp.zeros(1)
     quat = math.axis_angle_to_quat(jp.array([0, 0, 1]), yaw)
     new_quat = math.quat_mul(qpos[3:7], quat) # TODO fix all indices
     qpos = qpos.at[3:7].set(new_quat)
 
     # Sample the initial ball position.
-    ball_pos = self.sample_ball_position(rng, yaw[0]) + qpos[19:22]
-    # Set the ball position relative to the robot position.
-    qpos = qpos.at[19:22].set(ball_pos)
+    ball_pos = self.sample_ball_position(rng, yaw) + qpos[0:2]
 
+    # Set the ball position relative to the robot position.
+    qpos = qpos.at[19:21].set(ball_pos)
+    qpos = qpos.at[21].set(jp.array(0.07))  # Ball height.
 
     # Sample the initial joint positions.
     # qpos[7:19]=*U(0.5, 1.5)
@@ -262,7 +263,7 @@ class Kick(wolfgang_base.WolfgangEnv):
         "feet_air_time": jp.zeros(2),
         "last_contact": jp.zeros(2, dtype=bool),
         "swing_peak": jp.zeros(2),
-        "initial_ball_pos": ball_pos,
+        "initial_ball_pos": jp.zeros(3) + qpos[19:22],
         "reached_ball": jp.zeros((), dtype=bool),
         "steps_since_reached_ball": jp.zeros((), dtype=jp.int32),
         # Phase related.
@@ -346,11 +347,7 @@ class Kick(wolfgang_base.WolfgangEnv):
     )
 
     # If the ball is reached bump the steps since reached ball.
-    state.info["steps_since_reached_ball"] = jp.where(
-        state.info["reached_ball"],
-        state.info["steps_since_reached_ball"] + 1,
-        0,
-    )
+    state.info["steps_since_reached_ball"] = state.info["steps_since_reached_ball"] + 1
 
     obs = self._get_obs(data, state.info, contact)
     done = self._get_termination(data)
@@ -483,7 +480,6 @@ class Kick(wolfgang_base.WolfgangEnv):
         feet_vel,  # 4*3
         info["feet_air_time"],  # 2
         info["reached_ball"],  # 1
-        info["steps_since_reached_ball"],  # 1
     ])
 
     return {
@@ -517,8 +513,8 @@ class Kick(wolfgang_base.WolfgangEnv):
     del metrics  # Unused.
     return {
         # Base-related rewards.
-        "lin_vel_x": self._reward_lin_vel_if_not_reached_ball(
-            info["reached_ball"],
+        "lin_vel_x": self._reward_tracking_lin_vel(
+            jp.array([0.4, 0.0, 0.0]),
             self.get_local_linvel(data)
         ),
         "stop_for_kick": self._walk_in_place_if_reached_ball(
@@ -584,7 +580,7 @@ class Kick(wolfgang_base.WolfgangEnv):
         ),
         "kick_motion": self._reward_left_kick_motion(
             info["reached_ball"],
-            info["steps_since_reached_ball"],
+            info["phase"],
             data.qpos[7:19],  # Joint positions.
         ),
     }
@@ -791,16 +787,7 @@ class Kick(wolfgang_base.WolfgangEnv):
   ) -> jax.Array:
     """Reward for the feet velocity during/before"""
     # The feet velocity should be in the direction of the ball.
-    foot_vel_norm = jp.linalg.norm(foot_vels.reshape(-1, 3)[:, :2], axis=-1)
-
-    # Take the max of the two feet velocities.
-    foot_vel_max = jp.max(foot_vel_norm)
-
-    return jp.where(
-        ball_reached,
-        foot_vel_max,
-        0.0
-    )
+    return jp.abs(foot_vels[0])
 
   def _reward_lin_vel_if_not_reached_ball(
       self, ball_reached: jax.Array, lin_vel: jax.Array
@@ -816,51 +803,33 @@ class Kick(wolfgang_base.WolfgangEnv):
       self, ball_reached: jax.Array, lin_vel: jax.Array
   ) -> jax.Array:
     """Reward for walking in place if the robot has reached the ball."""
-    return jp.where(
-        ball_reached,
-        self._reward_tracking_lin_vel(jp.array([0.0, 0.0, 0.0]), lin_vel),
-        0.0
-    )
+    return self._reward_tracking_lin_vel(jp.array([0.0, 0.0, 0.0]), lin_vel)
 
   def _reward_left_kick_motion(
-      self, ball_reached: jax.Array, steps_since_reached_ball: jax.Array, qpos: jax.Array
+      self, ball_reached: jax.Array, phase: jax.Array, qpos: jax.Array
   ) -> jax.Array:
     """Reward for the right kick motion after reaching the ball."""
     # Reward backward Hip Pitch during ball_reached (+ 0.5 seconds).
-    hip_pitch = qpos[self._hip_indices[1]][0]  # Left Hip Pitch.
+    hip_pitch = qpos[self._hip_indices[1] + 1][0]  # Left Hip Pitch.
 
-    transition_point = 0.5  # seconds
-    transition_point_steps = jp.round(transition_point / self.dt).astype(jp.int32)
+    knee_pitch = qpos[self._knee_indices[1] + 2][0]  # Left Knee Pitch.
 
-    # max hip pitch backwards
-    hip_pitch_reward = jp.where(
-        ball_reached & (steps_since_reached_ball < transition_point_steps),
-        -hip_pitch / jp.pi,  # Normalize to [-1, 1].
-        0.0
-    )
+    x = phase[0] + jp.pi
 
-    # Knee pulled back after reaching the ball.
-    knee_reward = jp.where(
-        ball_reached & (steps_since_reached_ball < transition_point_steps),
-        qpos[self._knee_indices[1]][0] / jp.pi,  # Left Knee Pitch.
-        0.0
-    )
+    # Give a sine example trajectory for the hip pitch.
+    target_angle = -jp.sin(
+        x * 2
+    ) * jp.pi / 3 + 0.742  # 0.742 is the default value for left hip pitch in home pose.
+    error = jp.sum(jp.square(hip_pitch - target_angle))
+    reward = jp.exp(-error / 0.01)
 
-    # Max hip pitch forwards
-    hip_pitch_reward += jp.where(
-        ball_reached & (steps_since_reached_ball >= transition_point_steps) & (steps_since_reached_ball < 2 * transition_point_steps),
-        hip_pitch / jp.pi,  # Normalize to [-1, 1].
-        0.0
-    )
+    target_knee_angle = jp.abs(jp.sin(
+        x
+    )) * jp.pi / 4 + 1.33  # 1.33 is the default value for left knee pitch in home pose.
+    error2 = jp.sum(jp.square(knee_pitch - target_knee_angle))
+    reward += jp.exp(-error2 / 0.01)
 
-    # Knee pushed forward after reaching the ball.
-    knee_reward += jp.where(
-        ball_reached & (steps_since_reached_ball >= transition_point_steps) & (steps_since_reached_ball < 2 * transition_point_steps),
-        -qpos[self._knee_indices[1]][0] / jp.pi,  # Left Knee Pitch.
-        0.0
-    )
-
-    return hip_pitch_reward + knee_reward
+    return jp.where(x <= jp.pi, 0.0, reward)
 
 
   def reached_ball(
@@ -890,9 +859,9 @@ class Kick(wolfgang_base.WolfgangEnv):
     ball_distance = jax.random.uniform(
         rng1, minval=self._config.ball_distance[0], maxval=self._config.ball_distance[1]
     )
-    ball_angle = jax.random.uniform(rng2, minval=yaw - jp.pi / 4, maxval=yaw + jp.pi / 4)
+    ball_angle = jax.random.uniform(rng2, minval=0.0, maxval=yaw[0] + jp.pi / 4)
 
     ball_x = jp.cos(ball_angle) * ball_distance
     ball_y = jp.sin(ball_angle) * ball_distance
 
-    return jp.array([ball_x, ball_y, 0.07])
+    return jp.array([ball_x, ball_y])
