@@ -34,7 +34,7 @@ def default_config() -> config_dict.ConfigDict:
   return config_dict.create(
       ctrl_dt=0.02,
       sim_dt=0.002,
-      episode_length=1000,
+      episode_length=500,
       action_repeat=1,
       action_scale=0.5,
       history_len=1,
@@ -50,21 +50,21 @@ def default_config() -> config_dict.ConfigDict:
               gravity=0.05,
               linvel=0.1,
               gyro=0.2,  # angvel.
-              ball_pos=0.03,  # m
+              ball_pos=0.1,  # m
           ),
       ),
       reward_config=config_dict.create(
           scales=config_dict.create(
               # Kick related rewards.
-              lin_vel_x=0.6,
+              lin_vel_x=1.0,
               stop_for_kick=0.0,
-              orient_to_ball=0.5,
+              orient_to_ball=0.2,
               ball_proximity=0.0,
               ball_height=0.0,
               ball_travel=0.0,
-              ball_speed=1.0,
-              kick_foot_velocity=0.1,
-              kick_motion=5.0,
+              ball_speed=0.5,
+              kick_foot_velocity=0.0,
+              kick_motion=0.0,
               # Base related rewards.
               lin_vel_z=0.0,
               ang_vel_xy=-0.15,
@@ -80,15 +80,16 @@ def default_config() -> config_dict.ConfigDict:
               feet_slip=-0.25,
               feet_height=0.0,
               feet_phase=1.0,
+              phase_divergence=-0.01,
               # Other rewards.
               stand_still=0.0,
               alive=0.0,
               termination=-1.0,
               # Pose related rewards.
-              joint_deviation_knee=-0.1,
+              joint_deviation_knee=-0.0,
               joint_deviation_hip=-0.0,
               dof_pos_limits=0.0,
-              pose=-0.1,
+              pose=-1.0,
           ),
           tracking_sigma=0.5,
           max_foot_height=0.1,
@@ -97,9 +98,9 @@ def default_config() -> config_dict.ConfigDict:
       push_config=config_dict.create(
           enable=True,
           interval_range=[5.0, 10.0],
-          magnitude_range=[0.05, 0.2],
+          magnitude_range=[0.05, 0.6],
       ),
-      ball_distance=[0.25, 0.3],
+      ball_distance=[0.25, 0.4],
   )
 
 
@@ -257,8 +258,8 @@ class Kick(wolfgang_base.WolfgangEnv):
     info = {
         "rng": rng,
         "step": 0,
-        "last_act": jp.zeros(self.mjx_model.nu),
-        "last_last_act": jp.zeros(self.mjx_model.nu),
+        "last_act": jp.zeros(self.mjx_model.nu + 1),
+        "last_last_act": jp.zeros(self.mjx_model.nu + 1),
         "motor_targets": jp.zeros(self.mjx_model.nu),
         "feet_air_time": jp.zeros(2),
         "last_contact": jp.zeros(2, dtype=bool),
@@ -313,7 +314,7 @@ class Kick(wolfgang_base.WolfgangEnv):
     data = state.data.replace(qvel=qvel)
     state = state.replace(data=data)
 
-    motor_targets = self._default_pose + action * self._config.action_scale
+    motor_targets = self._default_pose + action[:-1] * self._config.action_scale
     data = mjx_env.step(
         self.mjx_model, state.data, motor_targets, self.n_substeps
     )
@@ -363,7 +364,7 @@ class Kick(wolfgang_base.WolfgangEnv):
     state.info["push"] = push
     state.info["step"] += 1
     state.info["push_step"] += 1
-    phase_tp1 = state.info["phase"] + state.info["phase_dt"]
+    phase_tp1 = state.info["phase"] + state.info["phase_dt"] + action[-1] * self._config.action_scale * self.dt
     state.info["phase"] = jp.fmod(phase_tp1 + jp.pi, 2 * jp.pi) - jp.pi
     state.info["last_last_act"] = state.info["last_act"]
     state.info["last_act"] = action
@@ -514,7 +515,7 @@ class Kick(wolfgang_base.WolfgangEnv):
     return {
         # Base-related rewards.
         "lin_vel_x": self._reward_tracking_lin_vel(
-            jp.array([0.4, 0.0, 0.0]),
+            jp.array([0.5, 0.0, 0.0]),
             self.get_local_linvel(data)
         ),
         "stop_for_kick": self._walk_in_place_if_reached_ball(
@@ -544,6 +545,10 @@ class Kick(wolfgang_base.WolfgangEnv):
             data,
             info["phase"],
             self._config.reward_config.max_foot_height,
+        ),
+        "phase_divergence": self.cost_phase_divergence(
+            info["phase_dt"] + action[-1] * self._config.action_scale * self.dt,
+            info["phase_dt"],
         ),
         # Other rewards.
         "alive": self._reward_alive(),
@@ -600,7 +605,7 @@ class Kick(wolfgang_base.WolfgangEnv):
       ball_linvel: jax.Array,
   ) -> jax.Array:
     """Reward for the ball speed."""
-    return jp.linalg.norm(ball_linvel)
+    return jp.square(jp.linalg.norm(ball_linvel))
 
   def _ball_proximity_reward(
       self,
@@ -754,6 +759,13 @@ class Kick(wolfgang_base.WolfgangEnv):
     error = swing_peak / self._config.reward_config.max_foot_height - 1.0
     return jp.sum(jp.square(error) * first_contact)
 
+  def cost_phase_divergence(
+      self,
+      current_dt: jax.Array,
+      target_dt: jax.Array) -> jax.Array:
+    """Cost for phase divergence from the target phase."""
+    return jp.sum(jp.square((current_dt - target_dt) / self.dt))
+
   def _reward_feet_air_time(
       self,
       air_time: jax.Array,
@@ -776,7 +788,7 @@ class Kick(wolfgang_base.WolfgangEnv):
     foot_pos = data.site_xpos[self._feet_site_id]
     foot_z = foot_pos[..., -1]
     rz = gait.get_rz(phase, swing_height=foot_height)
-    error = jp.sum(jp.square(foot_z - rz))
+    error = jp.sum(jp.square(jp.clip(foot_z - rz, a_max=0.0)))
     reward = jp.exp(-error / 0.01)
     return reward
 
@@ -819,15 +831,15 @@ class Kick(wolfgang_base.WolfgangEnv):
     # Give a sine example trajectory for the hip pitch.
     target_angle = -jp.sin(
         x * 2
-    ) * jp.pi / 3 + 0.742  # 0.742 is the default value for left hip pitch in home pose.
+    ) * jp.pi / 2 + 0.742  # 0.742 is the default value for left hip pitch in home pose.
     error = jp.sum(jp.square(hip_pitch - target_angle))
     reward = jp.exp(-error / 0.01)
 
-    target_knee_angle = jp.abs(jp.sin(
-        x
-    )) * jp.pi / 4 + 1.33  # 1.33 is the default value for left knee pitch in home pose.
-    error2 = jp.sum(jp.square(knee_pitch - target_knee_angle))
-    reward += jp.exp(-error2 / 0.01)
+    #target_knee_angle = jp.abs(jp.sin(
+    #    x
+    #)) * jp.pi / 4 + 1.33  # 1.33 is the default value for left knee pitch in home pose.
+    #error2 = jp.sum(jp.square(knee_pitch - target_knee_angle))
+    #reward += jp.exp(-error2 / 0.01)
 
     return jp.where(x <= jp.pi, 0.0, reward)
 
@@ -859,7 +871,7 @@ class Kick(wolfgang_base.WolfgangEnv):
     ball_distance = jax.random.uniform(
         rng1, minval=self._config.ball_distance[0], maxval=self._config.ball_distance[1]
     )
-    ball_angle = jax.random.uniform(rng2, minval=0.0, maxval=yaw[0] + jp.pi / 4)
+    ball_angle = jax.random.uniform(rng2, minval=yaw[0] - jp.pi / 4, maxval=yaw[0] + jp.pi / 4)
 
     ball_x = jp.cos(ball_angle) * ball_distance
     ball_y = jp.sin(ball_angle) * ball_distance

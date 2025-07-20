@@ -108,7 +108,7 @@ class WolfgangEnv(mjx_env.MjxEnv):
 
   @property
   def action_size(self) -> int:
-    return self._mjx_model.nu
+    return self._mjx_model.nu + 1
 
   @property
   def mj_model(self) -> mujoco.MjModel:
