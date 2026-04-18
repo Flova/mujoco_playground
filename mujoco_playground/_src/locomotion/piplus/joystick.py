@@ -60,7 +60,7 @@ def default_config() -> config_dict.ConfigDict:
               orientation=-1.0,
               base_height=0.0,
               # Energy rewards.
-              torques=-2.5e-5,
+              torques=-2.5e-3,
               action_rate=-0.01,
               energy=-1.0e-3,
               # Feet rewards.
@@ -75,7 +75,7 @@ def default_config() -> config_dict.ConfigDict:
               termination=-1.0,
               # Pose rewards.
               joint_deviation_hip=-0.25,
-              joint_deviation_knee=-0.1,
+              joint_deviation_knee=0.0,
               dof_pos_limits=-1.0,
               pose=-1.0,
           ),
@@ -88,9 +88,9 @@ def default_config() -> config_dict.ConfigDict:
           interval_range=[5.0, 10.0],
           magnitude_range=[0.05, 2.5],
       ),
-      lin_vel_x=[-1.5, 1.5],
-      lin_vel_y=[-0.8, 0.8],
-      ang_vel_yaw=[-4.0, 4.0],
+      lin_vel_x=[-1.0, 1.0],
+      lin_vel_y=[-0.5, 0.5],
+      ang_vel_yaw=[-1.0, 1.0],
       stand_still_cmd_threshold=0.05,
   )
 
@@ -142,8 +142,8 @@ class Joystick(piplus_base.PiplusEnv):
     # Pose weights: lower weight for thigh (twist) joints.
     # Order matches qpos[7:]: r_leg(6), l_leg(6).
     self._weights = jp.array([
-        0.01, 1.0, 1.0, 0.01, 0.5, 1.0,  # r leg
-        0.01, 1.0, 1.0, 0.01, 0.5, 1.0,  # l leg
+        0.01, 1.0, 1.0, 0.01, 1.0, 1.0,  # r leg
+        0.01, 1.0, 1.0, 0.01, 1.0, 1.0,  # l leg
     ])
 
     self._torso_body_id = self._mj_model.body(consts.ROOT_BODY).id
@@ -218,9 +218,9 @@ class Joystick(piplus_base.PiplusEnv):
 
     # IMU and action delays.
     rng, imu_rng = jax.random.split(rng)
-    max_imu_delay = 3
-    min_imu_delay = 1
-    max_action_delay = 3
+    max_imu_delay = 1
+    min_imu_delay = 0
+    max_action_delay = 2
     min_action_delay = 1
 
     imu_delay = jax.random.randint(
@@ -343,9 +343,10 @@ class Joystick(piplus_base.PiplusEnv):
 
     phase_tp1 = state.info["phase"] + state.info["phase_dt"]
     phase_tp1 = jp.fmod(phase_tp1 + jp.pi, 2 * jp.pi) - jp.pi
-    state.info["phase"] = jp.where(
-        is_standing, self._double_support_phase, phase_tp1
-    )
+    state.info["phase"] = phase_tp1
+    # jp.where(
+    #     is_standing, self._double_support_phase, phase_tp1
+    # )
 
     state.info["last_last_act"] = state.info["last_act"]
     state.info["last_act"] = action

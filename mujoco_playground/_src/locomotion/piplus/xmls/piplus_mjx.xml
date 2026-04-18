@@ -61,12 +61,12 @@
 
   <worldbody>
     <body name="base_link" pos="0 0 0.5">
-      <site name="imu" size="0.01" pos="0 0 0"/>
+      <joint name="floating_base_joint" type="free" limited="false" actuatorfrclimited="false"/>
+      <site name="imu"/>
       <camera name="front" pos="1.210 -0.435 0.32" xyaxes="0.342 0.940 0.000 -0.321 0.117 0.940" mode="trackcom"/>
       <camera name="track" pos="0.805 -1.105 0.2" xyaxes="0.814 0.580 0.000 -0.140 0.196 0.971" mode="trackcom"/>
 
       <inertial pos="-0.00041617 7.079e-05 -0.0392999" quat="0.707016 0.706374 -0.0255218 0.0226693" mass="1.4947" diaginertia="0.00182015 0.00167434 0.00111607"/>
-      <joint name="floating_base_joint" type="free" limited="false" actuatorfrclimited="false"/>
       <geom type="mesh" class="visual" rgba="0.752941 0.752941 0.752941 1" mesh="base_link"/>
       <body name="torso_link">
         <inertial pos="0.00153764 -3.179e-05 0.0959554" quat="0.705415 0.708147 0.0225102 -0.0202894" mass="2.82494" diaginertia="0.0159234 0.0140664 0.0134032"/>
@@ -145,7 +145,7 @@
                 <joint name="r_ankle_pitch_joint" class="pi_joint_leg" pos="0 0 0" axis="0 1 0" range="-0.97 0.92"/>
                 <geom type="mesh" class="visual" rgba="0.752941 0.752941 0.752941 1" mesh="r_ankle_pitch_link"/>
                 <body name="r_ankle_roll_link" pos="0.051 0 0">
-                  <site name="r_foot" pos="-0.051 0 -0.05"/>
+                  <site name="r_foot" pos="-0.05 0 -0.05"/>
                   <inertial pos="0.0046213 8.211e-05 -0.015021" quat="0.563454 0.425204 0.421185 0.569494" mass="0.616626" diaginertia="0.00150793 0.00140979 0.000471117"/>
                   <joint name="r_ankle_roll_joint" class="pi_joint_leg" pos="0 0 0" axis="1 0 0" range="-0.78 0.78"/>
                   <geom type="mesh" class="visual" rgba="0.752941 0.752941 0.752941 1" mesh="r_ankle_roll_link"/>
@@ -177,7 +177,7 @@
                 <joint name="l_ankle_pitch_joint" class="pi_joint_leg" pos="0 0 0" axis="0 1 0" range="-0.97 0.92"/>
                 <geom type="mesh" class="visual" rgba="0.752941 0.752941 0.752941 1" mesh="l_ankle_pitch_link"/>
                 <body name="l_ankle_roll_link" pos="0.051 0 0">
-                  <site name="l_foot" pos="-0.051 0 -0.05"/>
+                  <site name="l_foot" pos="-0.05 0 -0.05"/>
                   <inertial pos="0.00456214 8.211e-05 -0.0125654" quat="0.563454 0.425204 0.421185 0.569494" mass="0.616626" diaginertia="0.00150793 0.00140979 0.000471117"/>
                   <joint name="l_ankle_roll_joint" class="pi_joint_leg" pos="0 0 0" axis="1 0 0" range="-0.78 0.78"/>
                   <geom type="mesh" class="visual" rgba="0.752941 0.752941 0.752941 1" mesh="l_ankle_roll_link"/>
