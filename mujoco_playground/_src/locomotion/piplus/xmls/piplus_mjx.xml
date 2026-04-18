@@ -1,7 +1,7 @@
 <mujoco model="piplus">
   <compiler angle="radian" meshdir="./meshes/" autolimits="true"/>
 
-  <option iterations="3" ls_iterations="5" timestep=".002" integrator="Euler">
+  <option iterations="3" ls_iterations="5" timestep="0.002" integrator="Euler">
     <flag eulerdamp="disable"/>
   </option>
 
@@ -60,7 +60,7 @@
   </asset>
 
   <worldbody>
-    <body name="base_link" pos="0 0 0.385">
+    <body name="base_link" pos="0 0 0.5">
       <site name="imu" size="0.01" pos="0 0 0"/>
       <camera name="front" pos="1.210 -0.435 0.32" xyaxes="0.342 0.940 0.000 -0.321 0.117 0.940" mode="trackcom"/>
       <camera name="track" pos="0.805 -1.105 0.2" xyaxes="0.814 0.580 0.000 -0.140 0.196 0.971" mode="trackcom"/>
@@ -194,18 +194,18 @@
   <actuator>
     <!-- Arms: 4438 motor, kp=6, kv=0.6, effort=10 Nm -->
     <!-- Legs: 5036 motor, effort=20 Nm, per-joint kp/kv -->
-    <position name="r_hip_pitch" joint="r_hip_pitch_joint" kp="110" kv="1.1" forcerange="-20 20"/>
-    <position name="r_hip_roll" joint="r_hip_roll_joint" kp="110" kv="1.4" forcerange="-20 20"/>
-    <position name="r_thigh" joint="r_thigh_joint" kp="110" kv="1.1" forcerange="-20 20"/>
-    <position name="r_calf" joint="r_calf_joint" kp="110" kv="1.1" forcerange="-20 20"/>
-    <position name="r_ankle_pitch" joint="r_ankle_pitch_joint" kp="210" kv="1.1" forcerange="-20 20"/>
-    <position name="r_ankle_roll" joint="r_ankle_roll_joint" kp="110" kv="1.1" forcerange="-20 20"/>
-    <position name="l_hip_pitch" joint="l_hip_pitch_joint" kp="110" kv="1.1" forcerange="-20 20"/>
-    <position name="l_hip_roll" joint="l_hip_roll_joint" kp="110" kv="1.4" forcerange="-20 20"/>
-    <position name="l_thigh" joint="l_thigh_joint" kp="110" kv="1.1" forcerange="-20 20"/>
-    <position name="l_calf" joint="l_calf_joint" kp="110" kv="1.1" forcerange="-20 20"/>
-    <position name="l_ankle_pitch" joint="l_ankle_pitch_joint" kp="210" kv="1.1" forcerange="-20 20"/>
-    <position name="l_ankle_roll" joint="l_ankle_roll_joint" kp="110" kv="1.1" forcerange="-20 20"/>
+    <position name="r_hip_pitch" joint="r_hip_pitch_joint" kp="35" kv="1.1" forcerange="-20 20"/>
+    <position name="r_hip_roll" joint="r_hip_roll_joint" kp="35" kv="1.4" forcerange="-20 20"/>
+    <position name="r_thigh" joint="r_thigh_joint" kp="35" kv="1.1" forcerange="-20 20"/>
+    <position name="r_calf" joint="r_calf_joint" kp="35" kv="1.1" forcerange="-20 20"/>
+    <position name="r_ankle_pitch" joint="r_ankle_pitch_joint" kp="35" kv="1.1" forcerange="-20 20"/>
+    <position name="r_ankle_roll" joint="r_ankle_roll_joint" kp="35" kv="1.1" forcerange="-20 20"/>
+    <position name="l_hip_pitch" joint="l_hip_pitch_joint" kp="35" kv="1.1" forcerange="-20 20"/>
+    <position name="l_hip_roll" joint="l_hip_roll_joint" kp="35" kv="1.4" forcerange="-20 20"/>
+    <position name="l_thigh" joint="l_thigh_joint" kp="35" kv="1.1" forcerange="-20 20"/>
+    <position name="l_calf" joint="l_calf_joint" kp="35" kv="1.1" forcerange="-20 20"/>
+    <position name="l_ankle_pitch" joint="l_ankle_pitch_joint" kp="35" kv="1.1" forcerange="-20 20"/>
+    <position name="l_ankle_roll" joint="l_ankle_roll_joint" kp="35" kv="1.1" forcerange="-20 20"/>
   </actuator>
 
   <sensor>

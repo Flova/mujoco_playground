@@ -86,7 +86,7 @@ def default_config() -> config_dict.ConfigDict:
       push_config=config_dict.create(
           enable=True,
           interval_range=[5.0, 10.0],
-          magnitude_range=[0.05, 1.5],
+          magnitude_range=[0.05, 2.5],
       ),
       lin_vel_x=[-1.5, 1.5],
       lin_vel_y=[-0.8, 0.8],
