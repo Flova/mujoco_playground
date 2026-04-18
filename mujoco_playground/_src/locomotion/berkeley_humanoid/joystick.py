@@ -208,7 +208,7 @@ class Joystick(berkeley_humanoid_base.BerkeleyHumanoidEnv):
 
     # Phase, freq=U(1.0, 1.5)
     rng, key = jax.random.split(rng)
-    gait_freq = jax.random.uniform(key, (1,), minval=1.25, maxval=1.5)
+    gait_freq = jax.random.uniform(key, (1,), minval=1.4, maxval=1.6)
     phase_dt = 2 * jp.pi * self.dt * gait_freq
     phase = jp.array([0, jp.pi])
 
