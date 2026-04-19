@@ -47,6 +47,7 @@ def default_config() -> config_dict.ConfigDict:
               gravity=0.05,
               linvel=0.1,
               gyro=0.2,
+              last_act=0.05,
           ),
       ),
       reward_config=config_dict.create(
@@ -69,12 +70,13 @@ def default_config() -> config_dict.ConfigDict:
               feet_slip=-0.25,
               feet_height=0.0,
               feet_phase=1.0,
+              feet_level=-5.0,
               # Other rewards.
               stand_still=0.0,
               alive=0.0,
               termination=-1.0,
               # Pose rewards.
-              joint_deviation_hip=-0.25,
+              joint_deviation_hip=-0.0,
               joint_deviation_knee=0.0,
               dof_pos_limits=-1.0,
               pose=-1.0,
@@ -421,13 +423,20 @@ class Joystick(piplus_base.PiplusEnv):
 
     linvel = self.get_local_linvel(data)
 
+    noisy_last_act = (
+        info["last_act"]
+        + jax.random.normal(noise_rng, shape=info["last_act"].shape)
+        * self._config.noise_config.level
+        * self._config.noise_config.scales.last_act
+    )
+
     state = jp.hstack([
         noisy_gyro,                                    # 3
         noisy_gravity,                                 # 3
         info["command"],                               # 3
         noisy_joint_angles - self._default_pose,       # 12
         noisy_joint_vel,                               # 12
-        info["last_act"],                              # 12
+        noisy_last_act,                                # 12
         phase,                                         # 4
     ])
 
@@ -507,6 +516,7 @@ class Joystick(piplus_base.PiplusEnv):
         "joint_deviation_knee": self._cost_joint_deviation_knee(data.qpos[7:]),
         "dof_pos_limits": self._cost_joint_pos_limits(data.qpos[7:]),
         "pose": self._cost_pose(data.qpos[7:]),
+        "feet_level": self._cost_feet_level(data),
     }
 
   def _reward_tracking_lin_vel(
@@ -642,6 +652,27 @@ class Joystick(piplus_base.PiplusEnv):
     rz = gait.get_rz(phase, swing_height=foot_height)
     error = jp.sum(jp.square(jp.clip(rz - foot_z, a_min=0.0)))
     return jp.exp(-error / 0.01)
+
+  def _cost_feet_level(self, data: mjx.Data) -> jax.Array:
+    # Foot pitch penalty: penalize non-level feet when under the body.
+    # When the foot is far forward/backward the penalty is relaxed.
+    foot_xmat = data.site_xmat[self._feet_site_id].reshape(-1, 3, 3)
+    # Third column of rotation matrix = local Z axis (foot normal) in world frame.
+    foot_normal_world = foot_xmat[:, :, 2]  # shape (2, 3)
+    # Pitch error only (X component); ignore roll (Y component).
+    pitch_error = jp.square(foot_normal_world[:, 0])  # shape (2,)
+
+    # Foot position relative to body in body frame.
+    body_pos = data.qpos[:3]
+    body_xmat = data.xmat[self._torso_body_id].reshape(3, 3)
+    foot_pos = data.site_xpos[self._feet_site_id]  # shape (2, 3)
+    foot_rel_body = (body_xmat.T @ (foot_pos - body_pos).T).T  # shape (2, 3)
+    foot_forward = foot_rel_body[:, 0]  # forward/backward distance in body frame
+
+    # Penalty weight: high when foot is under the body, low when foot is far forward/backward.
+    weight = jp.exp(-jp.square(foot_forward) / (0.1 ** 2))
+
+    return jp.sum(pitch_error * weight)
 
   def sample_command(self, rng: jax.Array) -> jax.Array:
     rng1, rng2, rng3, rng4 = jax.random.split(rng, 4)
