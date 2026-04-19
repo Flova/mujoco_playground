@@ -14,6 +14,8 @@
 # ==============================================================================
 """Joystick task for PiPlus humanoid."""
 
+_MAX_SYM_DELAY = 25  # steps; covers half-period at lowest gait freq (1.3 Hz, dt=0.02 → ~19 steps)
+
 from typing import Any, Dict, Optional, Union
 
 import jax
@@ -75,6 +77,7 @@ def default_config() -> config_dict.ConfigDict:
               stand_still=0.0,
               alive=0.0,
               termination=-1.0,
+              symmetry=-0.05,
               # Pose rewards.
               joint_deviation_hip=-0.0,
               joint_deviation_knee=0.0,
@@ -172,6 +175,11 @@ class Joystick(piplus_base.PiplusEnv):
 
     self._double_support_phase = jp.array([-jp.pi / 2, jp.pi / 2])
 
+    # Action mirror symmetry: swap right/left halves, negate roll and twist joints.
+    # Joint order per leg: hip_pitch, hip_roll, thigh(twist), calf, ankle_pitch, ankle_roll
+    self._mirror_indices = jp.array([6, 7, 8, 9, 10, 11, 0, 1, 2, 3, 4, 5])
+    self._mirror_signs = jp.array([1., -1., -1., 1., 1., -1., 1., -1., -1., 1., 1., -1.])
+
   def reset(self, rng: jax.Array) -> mjx_env.State:
     qpos = self._init_q
     qvel = jp.zeros(self.mjx_model.nv)
@@ -232,6 +240,8 @@ class Joystick(piplus_base.PiplusEnv):
         imu_rng, minval=min_action_delay, maxval=max_action_delay, shape=()
     )
 
+    half_period_steps = jp.round(jp.pi / jp.squeeze(phase_dt)).astype(jp.int32)
+
     info = {
         "rng": rng,
         "step": 0,
@@ -252,6 +262,9 @@ class Joystick(piplus_base.PiplusEnv):
         "gyro_buffer": jp.zeros((max_imu_delay, 3)),
         "action_delay": action_delay,
         "action_buffer": jp.zeros((max_action_delay, self.mjx_model.nu)),
+        "sym_buffer": jp.zeros((_MAX_SYM_DELAY, self.mjx_model.nu)),
+        "sym_cmd_buffer": jp.zeros((_MAX_SYM_DELAY, 3)),
+        "half_period_steps": half_period_steps,
     }
 
     metrics = {}
@@ -322,6 +335,14 @@ class Joystick(piplus_base.PiplusEnv):
     state.info["gyro_buffer"] = jp.concatenate(
         [state.info["gyro_buffer"][1:], self.get_gyro(data)[None]],
         axis=0,
+    )
+
+    # Update symmetry buffers: newest entry at end, oldest at start.
+    state.info["sym_buffer"] = jp.concatenate(
+        [state.info["sym_buffer"][1:], action[None, ...]], axis=0
+    )
+    state.info["sym_cmd_buffer"] = jp.concatenate(
+        [state.info["sym_cmd_buffer"][1:], state.info["command"][None, ...]], axis=0
     )
 
     obs = self._get_obs(data, state.info, contact)
@@ -517,6 +538,7 @@ class Joystick(piplus_base.PiplusEnv):
         "dof_pos_limits": self._cost_joint_pos_limits(data.qpos[7:]),
         "pose": self._cost_pose(data.qpos[7:]),
         "feet_level": self._cost_feet_level(data),
+        "symmetry": self._cost_action_symmetry(action, info),
     }
 
   def _reward_tracking_lin_vel(
@@ -670,9 +692,24 @@ class Joystick(piplus_base.PiplusEnv):
     foot_forward = foot_rel_body[:, 0]  # forward/backward distance in body frame
 
     # Penalty weight: high when foot is under the body, low when foot is far forward/backward.
-    weight = jp.exp(-jp.square(foot_forward) / (0.1 ** 2))
+    weight = jp.exp(-jp.square(foot_forward) / (0.07 ** 2))
 
     return jp.sum(pitch_error * weight)
+
+  def _cost_action_symmetry(
+      self, action: jax.Array, info: dict[str, Any]
+  ) -> jax.Array:
+    half_steps = info["half_period_steps"]
+    read_idx = _MAX_SYM_DELAY - 1 - half_steps
+    delayed_action = info["sym_buffer"][read_idx]
+    delayed_cmd = info["sym_cmd_buffer"][read_idx]
+    mirrored = action[self._mirror_indices] * self._mirror_signs
+    error = jp.sum(jp.square(mirrored - delayed_action))
+    # Suppress penalty until the buffer has accumulated enough history.
+    has_data = info["step"] >= half_steps
+    # Suppress penalty if the command changed between the delayed and current step.
+    same_cmd = jp.all(jp.abs(delayed_cmd - info["command"]) < 1e-6)
+    return error * has_data * same_cmd
 
   def sample_command(self, rng: jax.Array) -> jax.Array:
     rng1, rng2, rng3, rng4 = jax.random.split(rng, 4)
