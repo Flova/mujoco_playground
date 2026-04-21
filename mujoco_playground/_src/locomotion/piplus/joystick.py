@@ -178,7 +178,7 @@ class Joystick(piplus_base.PiplusEnv):
     # Action mirror symmetry: swap right/left halves, negate roll and twist joints.
     # Joint order per leg: hip_pitch, hip_roll, thigh(twist), calf, ankle_pitch, ankle_roll
     self._mirror_indices = jp.array([6, 7, 8, 9, 10, 11, 0, 1, 2, 3, 4, 5])
-    self._mirror_signs = jp.array([1., -1., -1., 1., 1., -1., 1., -1., -1., 1., 1., -1.])
+    self._mirror_signs = jp.array([-1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1., -1.])
 
   def reset(self, rng: jax.Array) -> mjx_env.State:
     qpos = self._init_q

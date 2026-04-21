@@ -126,7 +126,7 @@
       </body>
       <body name="r_hip_pitch_link" pos="0 -0.0475 -0.0435">
         <inertial pos="7.92e-05 -0.0319026 9.097e-05" quat="0.428329 0.522509 -0.486869 0.553604" mass="0.459314" diaginertia="0.000279632 0.000271753 0.000264745"/>
-        <joint name="r_hip_pitch_joint" class="pi_joint_leg" pos="0 0 0" axis="0 1 0" range="-1.76 1.76"/>
+        <joint name="r_hip_pitch_joint" class="pi_joint_leg" pos="0 0 0" axis="0 -1 0" range="-1.76 1.76"/>
         <geom type="mesh" class="visual" rgba="0.752941 0.752941 0.752941 1" mesh="r_hip_pitch_link"/>
         <body name="r_hip_roll_link" pos="0 -0.034 0">
           <inertial pos="0.00102172 -0.00033797 -0.0584583" quat="0.701595 0.0555068 0.0565269 0.708158" mass="0.558201" diaginertia="0.000740261 0.000626564 0.000407515"/>
@@ -134,7 +134,7 @@
           <geom type="mesh" class="visual" rgba="0.752941 0.752941 0.752941 1" mesh="r_hip_roll_link"/>
           <body name="r_thigh_link" pos="-0.00035 0 -0.0974">
             <inertial pos="0.00064557 -0.00075206 -0.0208405" quat="0.703792 0.710207 0.0135977 -0.00990732" mass="0.154843" diaginertia="0.000187812 0.000161216 0.000100573"/>
-            <joint name="r_thigh_joint" class="pi_joint_leg" pos="0 0 0" axis="0 0 1" range="-2.87 2.87"/>
+            <joint name="r_thigh_joint" class="pi_joint_leg" pos="0 0 0" axis="0 0 -1" range="-2.87 2.87"/>
             <geom type="mesh" class="visual" rgba="0.752941 0.752941 0.752941 1" mesh="r_thigh_link"/>
             <body name="r_calf_link" pos="0 0 -0.045">
               <inertial pos="-1.001e-05 -0.00237049 -0.0666124" quat="0.999998 -0.000800274 0.00132271 -0.000965395" mass="0.858523" diaginertia="0.00416944 0.00414653 0.000429274"/>
@@ -142,7 +142,7 @@
               <geom type="mesh" class="visual" rgba="0.752941 0.752941 0.752941 1" mesh="r_calf_link"/>
               <body name="r_ankle_pitch_link" pos="0 0 -0.14">
                 <inertial pos="0.00503044 0.00051345 -0.00016685" quat="-0.00108772 0.710445 -0.00435661 0.703738" mass="0.163526" diaginertia="0.00028931 0.000208237 0.000115362"/>
-                <joint name="r_ankle_pitch_joint" class="pi_joint_leg" pos="0 0 0" axis="0 1 0" range="-0.97 0.92"/>
+                <joint name="r_ankle_pitch_joint" class="pi_joint_leg" pos="0 0 0" axis="0 -1 0" range="-0.97 0.92"/>
                 <geom type="mesh" class="visual" rgba="0.752941 0.752941 0.752941 1" mesh="r_ankle_pitch_link"/>
                 <body name="r_ankle_roll_link" pos="0.051 0 0">
                   <site name="r_foot" pos="-0.05 0 -0.05"/>
@@ -166,11 +166,11 @@
           <geom type="mesh" class="visual" rgba="0.752941 0.752941 0.752941 1" mesh="l_hip_roll_link"/>
           <body name="l_thigh_link" pos="-0.00035 0 -0.0974">
             <inertial pos="0.00071587 0.00075215 -0.0208406" quat="0.710169 0.70371 0.0141108 -0.015948" mass="0.154842" diaginertia="0.000187829 0.000161177 0.000100564"/>
-            <joint name="l_thigh_joint" class="pi_joint_leg" pos="0 0 0" axis="0 0 1" range="-2.87 2.87"/>
+            <joint name="l_thigh_joint" class="pi_joint_leg" pos="0 0 0" axis="0 0 -1" range="-2.87 2.87"/>
             <geom type="mesh" class="visual" rgba="0.752941 0.752941 0.752941 1" mesh="l_thigh_link"/>
             <body name="l_calf_link" pos="0 0 -0.045">
               <inertial pos="-1.001e-05 0.00237048 -0.0666125" quat="0.999997 0.000796813 -0.00130207 0.00164731" mass="0.858523" diaginertia="0.00416944 0.00414652 0.000429275"/>
-              <joint name="l_calf_joint" class="pi_joint_leg" pos="0 0 0" axis="0 1 0" range="-2.14 2.35"/>
+              <joint name="l_calf_joint" class="pi_joint_leg" pos="0 0 0" axis="0 -1 0" range="-2.14 2.35"/>
               <geom type="mesh" class="visual" rgba="0.752941 0.752941 0.752941 1" mesh="l_calf_link"/>
               <body name="l_ankle_pitch_link" pos="0 0 -0.14">
                 <inertial pos="0.00503044 -0.00051345 -0.00016685" quat="0.00108772 0.710445 0.00435661 0.703738" mass="0.163526" diaginertia="0.00028931 0.000208237 0.000115362"/>
