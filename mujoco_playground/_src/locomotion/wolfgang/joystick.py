@@ -94,6 +94,9 @@ def default_config() -> config_dict.ConfigDict:
       lin_vel_x=[-0.5, 0.5],
       lin_vel_y=[-0.5, 0.5],
       ang_vel_yaw=[-1.5, 1.5],
+      # Commands below this norm are treated as "stand still": phase is frozen
+      # at double-support and the phase observation is held fixed.
+      stand_still_cmd_threshold=0.05,
   )
 
 
@@ -178,6 +181,9 @@ class Joystick(wolfgang_base.WolfgangEnv):
     qpos_noise_scale[faa_ids] = self._config.noise_config.scales.faa_pos
     self._qpos_noise_scale = jp.array(qpos_noise_scale)
 
+    # Double-support phase: both feet grounded.
+    self._double_support_phase = jp.array([-jp.pi/2, jp.pi/2])
+
   def reset(self, rng: jax.Array) -> mjx_env.State:
     qpos = self._init_q
     qvel = jp.zeros(self.mjx_model.nv)
@@ -227,12 +233,22 @@ class Joystick(wolfgang_base.WolfgangEnv):
     # Sample imu delay.
     rng, imu_rng = jax.random.split(rng)
 
-    max_imu_delay = 4
+    max_imu_delay = 3
+    min_imu_delay = 0
+    max_action_delay = 3
+    min_action_delay = 0
 
     imu_delay = jax.random.randint(
         imu_rng,
-        minval=0,
+        minval=min_imu_delay,
         maxval=max_imu_delay,
+        shape=(),
+    )
+
+    action_delay = jax.random.randint(
+        imu_rng,
+        minval=min_action_delay,
+        maxval=max_action_delay,
         shape=(),
     )
 
@@ -257,6 +273,9 @@ class Joystick(wolfgang_base.WolfgangEnv):
         "imu_delay": imu_delay,
         "imu_buffer": jp.broadcast_to(jp.eye(3), (max_imu_delay, 3, 3)),
         "gyro_buffer": jp.zeros((max_imu_delay, 3)),
+        # Action buffer
+        "action_delay": action_delay,
+        "action_buffer": jp.zeros((max_action_delay, self.mjx_model.nu)),
     }
 
     metrics = {}
@@ -273,6 +292,14 @@ class Joystick(wolfgang_base.WolfgangEnv):
     return mjx_env.State(data, obs, reward, done, metrics, info)
 
   def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
+    # Delay action
+    state.info["action_buffer"] = jp.concatenate(
+        [state.info["action_buffer"][1:], action[None, ...]],
+        axis=0
+    )
+    delayed_action = state.info["action_buffer"][state.info["action_delay"]]
+
+
     state.info["rng"], push1_rng, push2_rng = jax.random.split(
         state.info["rng"], 3
     )
@@ -293,7 +320,7 @@ class Joystick(wolfgang_base.WolfgangEnv):
     data = state.data.replace(qvel=qvel)
     state = state.replace(data=data)
 
-    motor_targets = self._default_pose + action * self._config.action_scale
+    motor_targets = self._default_pose + delayed_action * self._config.action_scale
     data = mjx_env.step(
         self.mjx_model, state.data, motor_targets, self.n_substeps
     )
@@ -336,8 +363,23 @@ class Joystick(wolfgang_base.WolfgangEnv):
     state.info["push"] = push
     state.info["step"] += 1
     state.info["push_step"] += 1
+
+    # --- Phase update ---
+    # When the command is near zero, snap to double-support and freeze the
+    # phase so the observation stays in a well-defined standing state.
+    # The snap is instantaneous (allowed to "jump" there); once standing the
+    # phase simply stops advancing.
+    cmd_norm = jp.linalg.norm(state.info["command"])
+    is_standing = cmd_norm < self._config.stand_still_cmd_threshold
+
     phase_tp1 = state.info["phase"] + state.info["phase_dt"]
-    state.info["phase"] = jp.fmod(phase_tp1 + jp.pi, 2 * jp.pi) - jp.pi
+    phase_tp1 = jp.fmod(phase_tp1 + jp.pi, 2 * jp.pi) - jp.pi
+    state.info["phase"] = jp.where(
+        is_standing,
+        self._double_support_phase,  # snap & freeze at double support
+        phase_tp1,
+    )
+
     state.info["last_last_act"] = state.info["last_act"]
     state.info["last_act"] = action
     state.info["rng"], cmd_rng = jax.random.split(state.info["rng"])
@@ -659,11 +701,10 @@ class Joystick(wolfgang_base.WolfgangEnv):
     foot_pos = data.site_xpos[self._feet_site_id]
     foot_z = foot_pos[..., -1]
     rz = gait.get_rz(phase, swing_height=foot_height)
-    error = jp.sum(jp.square(foot_z - rz))
+    # Only penalise when foot_z < rz (foot is lower than the minimum height).
+    # Clamp the signed error so that being *above* rz contributes 0 error.
+    error = jp.sum(jp.square(jp.clip(rz - foot_z, a_min=0.0)))
     reward = jp.exp(-error / 0.01)
-    # TODO(kevin): Ensure no movement at 0 command.
-    # cmd_norm = jp.linalg.norm(commands)
-    # reward *= cmd_norm > 0.1  # No reward for zero commands.
     return reward
 
   def sample_command(self, rng: jax.Array) -> jax.Array:

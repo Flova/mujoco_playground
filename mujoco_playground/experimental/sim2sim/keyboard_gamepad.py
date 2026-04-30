@@ -117,7 +117,6 @@ class KeyboardGamepad:
                 self.vx = 0.0
                 self.vy = 0.0
                 self.wz = 0.0
-                print(f"Velocity reset to zero at {time.time()}")
             else:
                 # Update velocities
                 self.vx += dx
@@ -128,7 +127,6 @@ class KeyboardGamepad:
                 self.vx = max(-self.max_speed, min(self.vx, self.max_speed))
                 self.vy = max(-self.max_speed, min(self.vy, self.max_speed))
                 self.wz = max(-self.max_speed, min(self.wz, self.max_speed))
-            print(f"Velocity changed to ({self.vx:.2f}, {self.vy:.2f}, {self.wz:.2f}) at {time.time()}")
 
     def get_command(self):
         """
