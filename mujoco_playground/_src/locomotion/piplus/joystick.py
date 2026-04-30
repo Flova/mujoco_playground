@@ -73,6 +73,7 @@ def default_config() -> config_dict.ConfigDict:
               feet_height=0.0,
               feet_phase=1.0,
               feet_level=-5.0,
+              #feet_contact_force=-0.001,
               # Other rewards.
               stand_still=0.0,
               alive=0.0,
@@ -95,7 +96,7 @@ def default_config() -> config_dict.ConfigDict:
       ),
       lin_vel_x=[-1.0, 1.0],
       lin_vel_y=[-0.5, 0.5],
-      ang_vel_yaw=[-1.0, 1.0],
+      ang_vel_yaw=[-2.0, 2.0],
       stand_still_cmd_threshold=0.05,
   )
 
@@ -161,6 +162,9 @@ class Joystick(piplus_base.PiplusEnv):
     self._floor_geom_id = self._mj_model.geom("floor").id
     self._feet_geom_id = np.array(
         [self._mj_model.geom(name).id for name in consts.FEET_GEOMS]
+    )
+    self._feet_body_id = np.array(
+        [self._mj_model.geom_bodyid[gid] for gid in self._feet_geom_id]
     )
 
     foot_linvel_sensor_adr = []
@@ -538,6 +542,7 @@ class Joystick(piplus_base.PiplusEnv):
         "dof_pos_limits": self._cost_joint_pos_limits(data.qpos[7:]),
         "pose": self._cost_pose(data.qpos[7:]),
         "feet_level": self._cost_feet_level(data),
+        #"feet_contact_force": self._cost_feet_contact_force(data, first_contact),
         "symmetry": self._cost_action_symmetry(action, info),
     }
 
@@ -695,6 +700,14 @@ class Joystick(piplus_base.PiplusEnv):
     weight = jp.exp(-jp.square(foot_forward) / (0.07 ** 2))
 
     return jp.sum(pitch_error * weight)
+
+  def _cost_feet_contact_force(
+      self, data: mjx.Data, first_contact: jax.Array
+  ) -> jax.Array:
+    # cfrc_ext layout per body: [torque(3), force(3)] in world frame.
+    forces = data.cfrc_ext[self._feet_body_id, 3:]  # (2, 3)
+    force_norms = jp.linalg.norm(forces, axis=-1)    # (2,)
+    return jp.sum(jp.square(force_norms) * first_contact)
 
   def _cost_action_symmetry(
       self, action: jax.Array, info: dict[str, Any]
