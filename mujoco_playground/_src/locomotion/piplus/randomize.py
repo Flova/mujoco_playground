@@ -20,9 +20,6 @@ from mujoco import mjx
 FLOOR_GEOM_ID = 0
 TORSO_BODY_ID = 1
 
-# 12 actuated joints (legs only).
-NUM_JOINTS = 12
-
 
 def domain_randomize(model: mjx.Model, rng: jax.Array):
   @jax.vmap
@@ -35,30 +32,28 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
 
     # Scale static friction: *U(0.9, 1.1).
     rng, key = jax.random.split(rng)
-    frictionloss = model.dof_frictionloss[6:] * jax.random.uniform(
-        key, shape=(NUM_JOINTS,), minval=0.9, maxval=1.1
+    frictionloss = model.dof_frictionloss[6:18] * jax.random.uniform(
+        key, shape=(12,), minval=0.9, maxval=1.1
     )
-    dof_frictionloss = model.dof_frictionloss.at[6:].set(frictionloss)
+    dof_frictionloss = model.dof_frictionloss.at[6:18].set(frictionloss)
 
     # Scale armature: *U(1.0, 1.05).
     rng, key = jax.random.split(rng)
-    armature = model.dof_armature[6:] * jax.random.uniform(
-        key, shape=(NUM_JOINTS,), minval=1.0, maxval=1.05
+    armature = model.dof_armature[6:18] * jax.random.uniform(
+        key, shape=(12,), minval=1.0, maxval=1.05
     )
-    dof_armature = model.dof_armature.at[6:].set(armature)
+    dof_armature = model.dof_armature.at[6:18].set(armature)
 
     # Scale damping: *U(0.95, 1.05).
     rng, key = jax.random.split(rng)
-    damping = model.dof_damping[6:] * jax.random.uniform(
-        key, shape=(NUM_JOINTS,), minval=0.95, maxval=1.05
+    damping = model.dof_damping[6:18] * jax.random.uniform(
+        key, shape=(12,), minval=0.95, maxval=1.05
     )
-    dof_damping = model.dof_damping.at[6:].set(damping)
+    dof_damping = model.dof_damping.at[6:18].set(damping)
 
-    # Scale actuator gains: *U(0.9, 2.0).
+    # Scale actuator gains: *U(0.9, 1.1).
     rng, key = jax.random.split(rng)
-    noise = jax.random.uniform(
-        key, shape=(NUM_JOINTS,), minval=0.9, maxval=1.1
-    )
+    noise = jax.random.uniform(key, shape=(12,), minval=0.9, maxval=1.1)
     actuator_gain = model.actuator_gainprm.at[:, 0].set(
         model.actuator_gainprm[:, 0] * noise
     )
@@ -68,9 +63,7 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
 
     # Scale all link masses: *U(0.9, 1.1).
     rng, key = jax.random.split(rng)
-    dmass = jax.random.uniform(
-        key, shape=(model.nbody,), minval=0.9, maxval=1.1
-    )
+    dmass = jax.random.uniform(key, shape=(model.nbody,), minval=0.9, maxval=1.1)
     body_mass = model.body_mass.at[:].set(model.body_mass * dmass)
 
     # Add mass to torso: +U(-0.5, 0.5).
@@ -82,9 +75,7 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
 
     # Randomize com of torso: +U(-0.05, 0.05).
     rng, key = jax.random.split(rng)
-    com_offset = jax.random.uniform(
-        key, shape=(3,), minval=-0.05, maxval=0.05
-    )
+    com_offset = jax.random.uniform(key, shape=(3,), minval=-0.05, maxval=0.05)
     body_com = model.body_ipos.at[TORSO_BODY_ID].set(
         model.body_ipos[TORSO_BODY_ID] + com_offset
     )
@@ -99,9 +90,9 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
     # Jitter qpos0: +U(-0.05, 0.05).
     rng, key = jax.random.split(rng)
     qpos0 = model.qpos0
-    qpos0 = qpos0.at[7:].set(
-        qpos0[7:]
-        + jax.random.uniform(key, shape=(NUM_JOINTS,), minval=-0.05, maxval=0.05)
+    qpos0 = qpos0.at[7:19].set(
+        qpos0[7:19]
+        + jax.random.uniform(key, shape=(12,), minval=-0.05, maxval=0.05)
     )
 
     return (

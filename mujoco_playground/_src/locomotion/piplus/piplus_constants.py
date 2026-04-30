@@ -21,12 +21,14 @@ from mujoco_playground._src import mjx_env
 ROOT_PATH = mjx_env.ROOT_PATH / "locomotion" / "piplus"
 FLAT_TERRAIN_XML = ROOT_PATH / "xmls" / "scene_mjx_flat_terrain.xml"
 ROUGH_TERRAIN_XML = ROOT_PATH / "xmls" / "scene_mjx_rough_terrain.xml"
+KICK_FLAT_TERRAIN_XML = ROOT_PATH / "xmls" / "scene_mjx_kick_flat_terrain.xml"
 
 
 def task_to_xml(task_name: str) -> epath.Path:
   return {
       "flat_terrain": FLAT_TERRAIN_XML,
       "rough_terrain": ROUGH_TERRAIN_XML,
+      "kick_flat_terrain": KICK_FLAT_TERRAIN_XML,
   }[task_name]
 
 
