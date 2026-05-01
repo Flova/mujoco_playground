@@ -57,15 +57,17 @@ def default_config() -> config_dict.ConfigDict:
       reward_config=config_dict.create(
           scales=config_dict.create(
               # Kick rewards.
-              lin_vel_x=1.0,
+              lin_vel_x=0.5,
               stop_for_kick=0.0,
               orient_to_ball=0.5,
               ball_proximity=0.0,
-              ball_height=0.0,
+              ball_height=0.3,
               ball_travel=0.0,
-              ball_speed=0.5,
+              ball_speed=0.0,
               kick_foot_velocity=0.0,
               kick_motion=0.0,
+              kick_direction=0.8,
+              orient_to_kick_dir=0.5,
               symmetry=-0.05,
               # Base rewards.
               lin_vel_z=0.0,
@@ -160,6 +162,9 @@ class Kick(piplus_base.PiplusEnv):
     self._torso_mass = self._mj_model.body_subtreemass[self._torso_body_id]
     self._site_id = self._mj_model.site("imu").id
     self._ball_site_id = self._mj_model.site("ball_center").id
+    self._kick_dir_marker_mocap_id = self._mj_model.body_mocapid[
+        self._mj_model.body("kick_dir_marker").id
+    ]
 
     self._feet_site_id = np.array(
         [self._mj_model.site(name).id for name in consts.FEET_SITES]
@@ -207,6 +212,11 @@ class Kick(piplus_base.PiplusEnv):
     new_quat = math.quat_mul(qpos[3:7], quat)
     qpos = qpos.at[3:7].set(new_quat)
 
+    # Sample kick direction in world frame.
+    rng, key = jax.random.split(rng)
+    kick_angle = jax.random.uniform(key, minval=0.0, maxval=2 * jp.pi)
+    kick_dir_world = jp.array([jp.cos(kick_angle), jp.sin(kick_angle)])
+
     # Ball position relative to robot.
     ball_pos = self._sample_ball_position(rng, yaw) + qpos[0:2]
     qpos = qpos.at[19:21].set(ball_pos)
@@ -225,6 +235,10 @@ class Kick(piplus_base.PiplusEnv):
     )
 
     data = mjx_env.init(self.mjx_model, qpos=qpos, qvel=qvel, ctrl=qpos[7:19])
+    marker_pos = jp.array([qpos[19] + kick_dir_world[0], qpos[20] + kick_dir_world[1], 0.07])
+    data = data.replace(
+        mocap_pos=data.mocap_pos.at[self._kick_dir_marker_mocap_id].set(marker_pos)
+    )
 
     # Gait phase.
     rng, key = jax.random.split(rng)
@@ -263,6 +277,7 @@ class Kick(piplus_base.PiplusEnv):
         "feet_air_time": jp.zeros(2),
         "last_contact": jp.zeros(2, dtype=bool),
         "swing_peak": jp.zeros(2),
+        "kick_dir_world": kick_dir_world,
         "initial_ball_pos": jp.array(qpos[19:22]),
         "reached_ball": jp.zeros((), dtype=bool),
         "steps_since_reached_ball": jp.zeros((), dtype=jp.int32),
@@ -324,6 +339,14 @@ class Kick(piplus_base.PiplusEnv):
     motor_targets = self._default_pose + delayed_action * self._config.action_scale
     data = mjx_env.step(self.mjx_model, state.data, motor_targets, self.n_substeps)
     state.info["motor_targets"] = motor_targets
+
+    ball_pos_world = data.site_xpos[self._ball_site_id]
+    marker_pos = jp.concatenate([
+        ball_pos_world[:2] + state.info["kick_dir_world"], jp.array([0.07])
+    ])
+    data = data.replace(
+        mocap_pos=data.mocap_pos.at[self._kick_dir_marker_mocap_id].set(marker_pos)
+    )
 
     contact = jp.array([
         geoms_colliding(data, geom_id, self._floor_geom_id)
@@ -459,6 +482,11 @@ class Kick(piplus_base.PiplusEnv):
         * self._config.noise_config.scales.ball_pos
     )
 
+    # Kick direction in robot local frame (command, no noise).
+    torso_mat = data.site_xmat[self._site_id].reshape(3, 3)
+    kick_dir_world_3d = jp.concatenate([info["kick_dir_world"], jp.zeros(1)])
+    kick_dir_local = (torso_mat.T @ kick_dir_world_3d)[:2]
+
     noisy_last_act = (
         info["last_act"]
         + jax.random.normal(noise_rng, shape=info["last_act"].shape)
@@ -474,6 +502,7 @@ class Kick(piplus_base.PiplusEnv):
         noisy_joint_vel,                               # 12
         noisy_last_act,                                # 12
         phase,                                         # 4
+        kick_dir_local,                                # 2
     ])
 
     accelerometer = self.get_accelerometer(data)
@@ -517,9 +546,7 @@ class Kick(piplus_base.PiplusEnv):
     del metrics
     ball_pos_local = self._get_ball_pos_local(data)
     return {
-        "lin_vel_x": self._reward_tracking_lin_vel(
-            jp.array([1.0, 0.0, 0.0]), self.get_local_linvel(data)
-        ),
+        "lin_vel_x": jp.linalg.norm(self.get_local_linvel(data)[:2]),
         "stop_for_kick": self._reward_stop_for_kick(
             info["reached_ball"], self.get_local_linvel(data)
         ),
@@ -540,6 +567,8 @@ class Kick(piplus_base.PiplusEnv):
             data.sensordata[self._foot_linvel_sensor_adr].ravel(),
             info["reached_ball"],
         ),
+        "kick_direction": self._reward_kick_direction(data, info),
+        "orient_to_kick_dir": self._reward_orient_to_kick_dir(data, info),
         "kick_motion": self._reward_kick_motion(
             info["reached_ball"], info["phase"], data.qpos[7:19]
         ),
@@ -608,6 +637,24 @@ class Kick(piplus_base.PiplusEnv):
     # Reward forward (x) velocity of left foot (index 3: l_foot is second site,
     # sensor order [l_foot, r_foot] matching FEET_SITES = ["l_foot", "r_foot"]).
     return jp.abs(foot_vels[3])
+
+  def _reward_kick_direction(
+      self, data: mjx.Data, info: dict[str, Any]
+  ) -> jax.Array:
+    """Ball speed squared in the commanded direction; zero if ball moves the wrong way."""
+    ball_vel = data.sensordata[self._ball_linvel_sensor_adr]
+    kick_dir = jp.concatenate([info["kick_dir_world"], jp.zeros(1)])
+    proj = jp.clip(jp.dot(ball_vel, kick_dir), 0.0, None)
+    return jp.square(proj)
+
+  def _reward_orient_to_kick_dir(
+      self, data: mjx.Data, info: dict[str, Any]
+  ) -> jax.Array:
+    """Reward robot forward axis aligning with the kick direction."""
+    torso_mat = data.site_xmat[self._site_id].reshape(3, 3)
+    fwd_xy = torso_mat[:2, 0]
+    fwd_xy = fwd_xy / (jp.linalg.norm(fwd_xy) + 1e-6)
+    return jp.clip(jp.dot(fwd_xy, info["kick_dir_world"]), 0.0, None)
 
   def _reward_stop_for_kick(
       self, reached_ball: jax.Array, lin_vel: jax.Array

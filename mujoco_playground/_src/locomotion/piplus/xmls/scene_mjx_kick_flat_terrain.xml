@@ -29,6 +29,9 @@
       <geom type="sphere" size="0.07" mass="0.205" material="ball" contype="1" conaffinity="1"
         friction="0.6 0.1 0.1" condim="6"/>
     </body>
+    <body name="kick_dir_marker" mocap="true" pos="1 0 0.07">
+      <geom type="sphere" size="0.06" rgba="0 0.8 0 0.7" contype="0" conaffinity="0"/>
+    </body>
   </worldbody>
 
   <sensor>
