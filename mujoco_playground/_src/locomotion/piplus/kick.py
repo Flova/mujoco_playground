@@ -57,7 +57,7 @@ def default_config() -> config_dict.ConfigDict:
       reward_config=config_dict.create(
           scales=config_dict.create(
               # Kick rewards.
-              lin_vel_x=0.5,
+              lin_vel_x=0.7,
               stop_for_kick=0.0,
               orient_to_ball=0.5,
               ball_proximity=0.0,
@@ -66,8 +66,8 @@ def default_config() -> config_dict.ConfigDict:
               ball_speed=0.0,
               kick_foot_velocity=0.0,
               kick_motion=0.0,
-              kick_direction=0.8,
-              orient_to_kick_dir=0.5,
+              kick_direction=1.0,
+              orient_to_kick_dir=0.8,
               symmetry=-0.05,
               # Base rewards.
               lin_vel_z=0.0,
@@ -235,9 +235,15 @@ class Kick(piplus_base.PiplusEnv):
     )
 
     data = mjx_env.init(self.mjx_model, qpos=qpos, qvel=qvel, ctrl=qpos[7:19])
-    marker_pos = jp.array([qpos[19] + kick_dir_world[0], qpos[20] + kick_dir_world[1], 0.07])
+    torso_pos = data.site_xpos[self._site_id]
+    _s = jp.sqrt(jp.array(0.5))
     data = data.replace(
-        mocap_pos=data.mocap_pos.at[self._kick_dir_marker_mocap_id].set(marker_pos)
+        mocap_pos=data.mocap_pos.at[self._kick_dir_marker_mocap_id].set(
+            jp.array([torso_pos[0], torso_pos[1], 0.6])
+        ),
+        mocap_quat=data.mocap_quat.at[self._kick_dir_marker_mocap_id].set(
+            jp.array([_s, -kick_dir_world[1] * _s, kick_dir_world[0] * _s, 0.0])
+        ),
     )
 
     # Gait phase.
@@ -254,6 +260,12 @@ class Kick(piplus_base.PiplusEnv):
         maxval=self._config.push_config.interval_range[1],
     )
     push_interval_steps = jp.round(push_interval / self.dt).astype(jp.int32)
+
+    # Kick direction resample interval (3–8 s).
+    rng, resample_rng = jax.random.split(rng)
+    kick_resample_interval_steps = jp.round(
+        jax.random.uniform(resample_rng, minval=3.0, maxval=8.0) / self.dt
+    ).astype(jp.int32)
 
     # IMU and action delays.
     rng, imu_rng = jax.random.split(rng)
@@ -278,6 +290,8 @@ class Kick(piplus_base.PiplusEnv):
         "last_contact": jp.zeros(2, dtype=bool),
         "swing_peak": jp.zeros(2),
         "kick_dir_world": kick_dir_world,
+        "kick_resample_step": jp.zeros((), dtype=jp.int32),
+        "kick_resample_interval_steps": kick_resample_interval_steps,
         "initial_ball_pos": jp.array(qpos[19:22]),
         "reached_ball": jp.zeros((), dtype=bool),
         "steps_since_reached_ball": jp.zeros((), dtype=jp.int32),
@@ -340,12 +354,38 @@ class Kick(piplus_base.PiplusEnv):
     data = mjx_env.step(self.mjx_model, state.data, motor_targets, self.n_substeps)
     state.info["motor_targets"] = motor_targets
 
-    ball_pos_world = data.site_xpos[self._ball_site_id]
-    marker_pos = jp.concatenate([
-        ball_pos_world[:2] + state.info["kick_dir_world"], jp.array([0.07])
-    ])
+    # Resample kick direction at random intervals.
+    should_resample = (
+        jp.mod(state.info["kick_resample_step"] + 1,
+               state.info["kick_resample_interval_steps"]) == 0
+    )
+    state.info["rng"], key1, key2 = jax.random.split(state.info["rng"], 3)
+    new_angle = jax.random.uniform(key1, minval=0.0, maxval=2 * jp.pi)
+    new_dir = jp.array([jp.cos(new_angle), jp.sin(new_angle)])
+    new_interval = jp.round(
+        jax.random.uniform(key2, minval=3.0, maxval=8.0) / self.dt
+    ).astype(jp.int32)
+    state.info["kick_dir_world"] = jp.where(
+        should_resample, new_dir, state.info["kick_dir_world"]
+    )
+    state.info["kick_resample_interval_steps"] = jp.where(
+        should_resample, new_interval, state.info["kick_resample_interval_steps"]
+    )
+    state.info["kick_resample_step"] = jp.where(
+        should_resample, 0, state.info["kick_resample_step"] + 1
+    )
+
+    # Update arrow marker: attached to robot, pointing in kick direction.
+    torso_pos = data.site_xpos[self._site_id]
+    kd = state.info["kick_dir_world"]
+    _s = jp.sqrt(jp.array(0.5))
     data = data.replace(
-        mocap_pos=data.mocap_pos.at[self._kick_dir_marker_mocap_id].set(marker_pos)
+        mocap_pos=data.mocap_pos.at[self._kick_dir_marker_mocap_id].set(
+            jp.array([torso_pos[0], torso_pos[1], 0.6])
+        ),
+        mocap_quat=data.mocap_quat.at[self._kick_dir_marker_mocap_id].set(
+            jp.array([_s, -kd[1] * _s, kd[0] * _s, 0.0])
+        ),
     )
 
     contact = jp.array([
@@ -650,11 +690,13 @@ class Kick(piplus_base.PiplusEnv):
   def _reward_orient_to_kick_dir(
       self, data: mjx.Data, info: dict[str, Any]
   ) -> jax.Array:
-    """Reward robot forward axis aligning with the kick direction."""
+    """Reward robot forward axis aligning with kick direction, scaled by proximity."""
+    dist = jp.linalg.norm(self._get_ball_pos_local(data))
+    weight = jp.clip(1.0 - dist / 0.5, 0.0, 1.0)
     torso_mat = data.site_xmat[self._site_id].reshape(3, 3)
     fwd_xy = torso_mat[:2, 0]
     fwd_xy = fwd_xy / (jp.linalg.norm(fwd_xy) + 1e-6)
-    return jp.clip(jp.dot(fwd_xy, info["kick_dir_world"]), 0.0, None)
+    return jp.clip(jp.dot(fwd_xy, info["kick_dir_world"]), 0.0, None) * weight
 
   def _reward_stop_for_kick(
       self, reached_ball: jax.Array, lin_vel: jax.Array
