@@ -162,6 +162,11 @@ class Kick(piplus_base.PiplusEnv):
     self._torso_mass = self._mj_model.body_subtreemass[self._torso_body_id]
     self._site_id = self._mj_model.site("imu").id
     self._ball_site_id = self._mj_model.site("ball_center").id
+    self._ball_body_id = self._mj_model.body("ball").id
+    self._ball_geom_id = self._mj_model.geom("ball_geom").id
+    self._ball_mass_base = float(self._mj_model.body_mass[self._ball_body_id])
+    self._ball_radius_base = float(self._mj_model.geom_size[self._ball_geom_id, 0])
+    self._ball_friction_base = jp.array(self._mj_model.geom_friction[self._ball_geom_id])
     self._kick_dir_marker_mocap_id = self._mj_model.body_mocapid[
         self._mj_model.body("kick_dir_marker").id
     ]
@@ -217,10 +222,16 @@ class Kick(piplus_base.PiplusEnv):
     kick_angle = jax.random.uniform(key, minval=0.0, maxval=2 * jp.pi)
     kick_dir_world = jp.array([jp.cos(kick_angle), jp.sin(kick_angle)])
 
+    # Randomize ball properties ±25%.
+    rng, key1, key2, key3 = jax.random.split(rng, 4)
+    ball_mass = self._ball_mass_base * jax.random.uniform(key1, minval=0.75, maxval=1.25)
+    ball_radius = self._ball_radius_base * jax.random.uniform(key2, minval=0.75, maxval=1.25)
+    ball_friction = self._ball_friction_base * jax.random.uniform(key3, (3,), minval=0.75, maxval=1.25)
+
     # Ball position relative to robot.
     ball_pos = self._sample_ball_position(rng, yaw) + qpos[0:2]
     qpos = qpos.at[19:21].set(ball_pos)
-    qpos = qpos.at[21].set(jp.array(0.07))
+    qpos = qpos.at[21].set(ball_radius)
 
     # Randomize joint positions.
     rng, key = jax.random.split(rng)
@@ -234,7 +245,8 @@ class Kick(piplus_base.PiplusEnv):
         jax.random.uniform(key, (6,), minval=-0.5, maxval=0.5)
     )
 
-    data = mjx_env.init(self.mjx_model, qpos=qpos, qvel=qvel, ctrl=qpos[7:19])
+    ball_mjx_model = self._randomize_ball_model(ball_mass, ball_radius, ball_friction)
+    data = mjx_env.init(ball_mjx_model, qpos=qpos, qvel=qvel, ctrl=qpos[7:19])
     torso_pos = data.site_xpos[self._site_id]
     _s = jp.sqrt(jp.array(0.5))
     data = data.replace(
@@ -267,6 +279,12 @@ class Kick(piplus_base.PiplusEnv):
         jax.random.uniform(resample_rng, minval=3.0, maxval=8.0) / self.dt
     ).astype(jp.int32)
 
+    # Ball push interval (3–8 s).
+    rng, ball_push_rng = jax.random.split(rng)
+    ball_push_interval_steps = jp.round(
+        jax.random.uniform(ball_push_rng, minval=3.0, maxval=8.0) / self.dt
+    ).astype(jp.int32)
+
     # IMU and action delays.
     rng, imu_rng = jax.random.split(rng)
     max_imu_delay = 1
@@ -292,6 +310,11 @@ class Kick(piplus_base.PiplusEnv):
         "kick_dir_world": kick_dir_world,
         "kick_resample_step": jp.zeros((), dtype=jp.int32),
         "kick_resample_interval_steps": kick_resample_interval_steps,
+        "ball_mass": ball_mass,
+        "ball_radius": ball_radius,
+        "ball_friction": ball_friction,
+        "ball_push_step": jp.zeros((), dtype=jp.int32),
+        "ball_push_interval_steps": ball_push_interval_steps,
         "initial_ball_pos": jp.array(qpos[19:22]),
         "reached_ball": jp.zeros((), dtype=bool),
         "steps_since_reached_ball": jp.zeros((), dtype=jp.int32),
@@ -347,11 +370,27 @@ class Kick(piplus_base.PiplusEnv):
     push *= self._config.push_config.enable
     qvel = state.data.qvel
     qvel = qvel.at[:2].set(push * push_magnitude + qvel[:2])
+
+    # Ball push.
+    state.info["rng"], bp_rng1, bp_rng2 = jax.random.split(state.info["rng"], 3)
+    ball_push_theta = jax.random.uniform(bp_rng1, maxval=2 * jp.pi)
+    ball_push_speed = jax.random.uniform(bp_rng2, minval=0.1, maxval=2.5)
+    ball_push = (
+        jp.array([jp.cos(ball_push_theta), jp.sin(ball_push_theta), 0.0])
+        * ball_push_speed
+        * (jp.mod(state.info["ball_push_step"] + 1,
+                  state.info["ball_push_interval_steps"]) == 0)
+    )
+    qvel = qvel.at[18:21].set(qvel[18:21] + ball_push)
+
     data = state.data.replace(qvel=qvel)
     state = state.replace(data=data)
 
     motor_targets = self._default_pose + delayed_action * self._config.action_scale
-    data = mjx_env.step(self.mjx_model, state.data, motor_targets, self.n_substeps)
+    ball_mjx_model = self._randomize_ball_model(
+        state.info["ball_mass"], state.info["ball_radius"], state.info["ball_friction"]
+    )
+    data = mjx_env.step(ball_mjx_model, state.data, motor_targets, self.n_substeps)
     state.info["motor_targets"] = motor_targets
 
     # Resample kick direction at random intervals.
@@ -435,6 +474,11 @@ class Kick(piplus_base.PiplusEnv):
     state.info["push"] = push
     state.info["step"] += 1
     state.info["push_step"] += 1
+    state.info["ball_push_step"] = jp.where(
+        jp.mod(state.info["ball_push_step"] + 1,
+               state.info["ball_push_interval_steps"]) == 0,
+        0, state.info["ball_push_step"] + 1,
+    )
 
     phase_tp1 = state.info["phase"] + state.info["phase_dt"]
     state.info["phase"] = jp.fmod(phase_tp1 + jp.pi, 2 * jp.pi) - jp.pi
@@ -455,6 +499,17 @@ class Kick(piplus_base.PiplusEnv):
     done = done.astype(reward.dtype)
     state = state.replace(data=data, obs=obs, reward=reward, done=done)
     return state
+
+  def _randomize_ball_model(
+      self, mass: jax.Array, radius: jax.Array, friction: jax.Array
+  ) -> mjx.Model:
+    inertia = jp.full(3, 0.4 * mass * jp.square(radius))
+    return self.mjx_model.replace(
+        body_mass=self.mjx_model.body_mass.at[self._ball_body_id].set(mass),
+        body_inertia=self.mjx_model.body_inertia.at[self._ball_body_id].set(inertia),
+        geom_size=self.mjx_model.geom_size.at[self._ball_geom_id, 0].set(radius),
+        geom_friction=self.mjx_model.geom_friction.at[self._ball_geom_id].set(friction),
+    )
 
   def _get_termination(self, data: mjx.Data) -> jax.Array:
     fall_termination = self.get_gravity(data)[-1] < 0.0
