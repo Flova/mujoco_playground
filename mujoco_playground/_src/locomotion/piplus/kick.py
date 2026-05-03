@@ -68,6 +68,7 @@ def default_config() -> config_dict.ConfigDict:
               kick_motion=0.0,
               kick_direction=1.0,
               orient_to_kick_dir=0.8,
+              wrong_approach=-0.5,
               symmetry=-0.05,
               # Base rewards.
               lin_vel_z=0.0,
@@ -664,6 +665,7 @@ class Kick(piplus_base.PiplusEnv):
         ),
         "kick_direction": self._reward_kick_direction(data, info),
         "orient_to_kick_dir": self._reward_orient_to_kick_dir(data, info),
+        "wrong_approach": self._cost_wrong_approach(data, info),
         "kick_motion": self._reward_kick_motion(
             info["reached_ball"], info["phase"], data.qpos[7:19]
         ),
@@ -747,11 +749,27 @@ class Kick(piplus_base.PiplusEnv):
   ) -> jax.Array:
     """Reward robot forward axis aligning with kick direction, scaled by proximity."""
     dist = jp.linalg.norm(self._get_ball_pos_local(data))
-    weight = jp.clip(1.0 - dist / 0.5, 0.0, 1.0)
+    weight = jp.clip(1.0 - dist / 1.0, 0.0, 1.0)
     torso_mat = data.site_xmat[self._site_id].reshape(3, 3)
     fwd_xy = torso_mat[:2, 0]
     fwd_xy = fwd_xy / (jp.linalg.norm(fwd_xy) + 1e-6)
     return jp.clip(jp.dot(fwd_xy, info["kick_dir_world"]), 0.0, None) * weight
+
+  def _cost_wrong_approach(
+      self, data: mjx.Data, info: dict[str, Any]
+  ) -> jax.Array:
+    """Penalty for being outside the 0.4–0.6 m approach ring while not aligned.
+    Inside ring (<0.4 m): 1x penalty. Outside ring (>0.6 m): 2x penalty."""
+    dist = jp.linalg.norm(self._get_ball_pos_local(data))
+    torso_mat = data.site_xmat[self._site_id].reshape(3, 3)
+    fwd_xy = torso_mat[:2, 0]
+    fwd_xy = fwd_xy / (jp.linalg.norm(fwd_xy) + 1e-6)
+    cos_angle = jp.dot(fwd_xy, info["kick_dir_world"])
+    cos_threshold = jp.cos(jp.array(40.0 * jp.pi / 180.0))
+    not_facing = cos_angle < cos_threshold
+    too_close = dist < 0.4
+    too_far = dist > 0.6
+    return ((too_close | too_far) & not_facing).astype(jp.float32)
 
   def _reward_stop_for_kick(
       self, reached_ball: jax.Array, lin_vel: jax.Array
