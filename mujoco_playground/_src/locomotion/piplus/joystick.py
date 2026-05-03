@@ -688,13 +688,14 @@ class Joystick(piplus_base.PiplusEnv):
       foot_height: jax.Array,
       commands: jax.Array,
   ) -> jax.Array:
-    del commands
     foot_pos = data.site_xpos[self._feet_site_id]
     foot_z = foot_pos[..., -1]
     rz = gait.get_rz(phase, swing_height=foot_height)
     error = jp.sum(jp.square(jp.clip(rz - foot_z, a_min=0.0)))
     reward =  jp.exp(-error / 0.01)
     reward *= commands[3] < 0.5
+    # Bump for walk in place
+    reward *= 1 + (jp.linalg.norm(commands[:3]) < 0.05)
     return reward
 
   def _cost_feet_level(self, data: mjx.Data) -> jax.Array:
