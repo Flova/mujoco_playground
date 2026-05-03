@@ -216,10 +216,11 @@ class Joystick(piplus_base.PiplusEnv):
     rng, key = jax.random.split(rng)
     gait_freq = jax.random.uniform(key, (1,), minval=1.3, maxval=1.6)
     phase_dt = 2 * jp.pi * self.dt * gait_freq
-    phase = jp.array([0, jp.pi])
 
     rng, cmd_rng = jax.random.split(rng)
     cmd = self.sample_command(cmd_rng)
+
+    phase = jp.array([-jp.pi / 2, jp.pi / 2])
 
     # Push interval.
     rng, push_rng = jax.random.split(rng)
@@ -258,6 +259,7 @@ class Joystick(piplus_base.PiplusEnv):
         "swing_peak": jp.zeros(2),
         "phase_dt": phase_dt,
         "phase": phase,
+        "phase_frozen": jp.zeros((), dtype=bool),
         "push": jp.array([0.0, 0.0]),
         "push_step": 0,
         "push_interval_steps": push_interval_steps,
@@ -267,7 +269,7 @@ class Joystick(piplus_base.PiplusEnv):
         "action_delay": action_delay,
         "action_buffer": jp.zeros((max_action_delay, self.mjx_model.nu)),
         "sym_buffer": jp.zeros((_MAX_SYM_DELAY, self.mjx_model.nu)),
-        "sym_cmd_buffer": jp.zeros((_MAX_SYM_DELAY, 3)),
+        "sym_cmd_buffer": jp.zeros((_MAX_SYM_DELAY, 4)),
         "half_period_steps": half_period_steps,
     }
 
@@ -365,15 +367,28 @@ class Joystick(piplus_base.PiplusEnv):
     state.info["push_step"] += 1
 
     # Phase update.
-    cmd_norm = jp.linalg.norm(state.info["command"])
-    is_standing = cmd_norm < self._config.stand_still_cmd_threshold
+    is_stop = state.info["command"][3] > 0.5
 
     phase_tp1 = state.info["phase"] + state.info["phase_dt"]
     phase_tp1 = jp.fmod(phase_tp1 + jp.pi, 2 * jp.pi) - jp.pi
-    state.info["phase"] = phase_tp1
-    # jp.where(
-    #     is_standing, self._double_support_phase, phase_tp1
-    # )
+
+    # Freeze phase at nearest symmetric point when stop is commanded.
+    # Uses phase proximity (not contact) to avoid coupling reward/state.
+    ds1 = jp.array([-jp.pi / 2, jp.pi / 2])
+    ds2 = jp.array([jp.pi / 2, -jp.pi / 2])
+    tol = jp.squeeze(state.info["phase_dt"]) * 3
+
+    def _max_circ_dist(a, b):
+      d = jp.abs(a - b)
+      return jp.max(jp.minimum(d, 2 * jp.pi - d))
+
+    d1 = _max_circ_dist(phase_tp1, ds1)
+    d2 = _max_circ_dist(phase_tp1, ds2)
+    near_ds = (d1 < tol) | (d2 < tol)
+    should_freeze = is_stop & (near_ds | state.info["phase_frozen"])
+    nearest_ds = jp.where(d1 <= d2, ds1, ds2)
+    state.info["phase"] = jp.where(should_freeze, nearest_ds, phase_tp1)
+    state.info["phase_frozen"] = should_freeze
 
     state.info["last_last_act"] = state.info["last_act"]
     state.info["last_act"] = action
@@ -458,7 +473,7 @@ class Joystick(piplus_base.PiplusEnv):
     state = jp.hstack([
         noisy_gyro,                                    # 3
         noisy_gravity,                                 # 3
-        info["command"],                               # 3
+        info["command"],                               # 4
         noisy_joint_angles - self._default_pose,       # 12
         noisy_joint_vel,                               # 12
         noisy_last_act,                                # 12
@@ -594,7 +609,7 @@ class Joystick(piplus_base.PiplusEnv):
   def _cost_stand_still(
       self, commands: jax.Array, qpos: jax.Array
   ) -> jax.Array:
-    cmd_norm = jp.linalg.norm(commands)
+    cmd_norm = jp.linalg.norm(commands[:3])
     return jp.sum(jp.abs(qpos - self._default_pose)) * (cmd_norm < 0.1)
 
   def _cost_termination(self, done: jax.Array) -> jax.Array:
@@ -659,7 +674,7 @@ class Joystick(piplus_base.PiplusEnv):
       threshold_min: float = 0.2,
       threshold_max: float = 0.5,
   ) -> jax.Array:
-    cmd_norm = jp.linalg.norm(commands)
+    cmd_norm = jp.linalg.norm(commands[:3])
     air_time = (air_time - threshold_min) * first_contact
     air_time = jp.clip(air_time, max=threshold_max - threshold_min)
     reward = jp.sum(air_time)
@@ -678,7 +693,9 @@ class Joystick(piplus_base.PiplusEnv):
     foot_z = foot_pos[..., -1]
     rz = gait.get_rz(phase, swing_height=foot_height)
     error = jp.sum(jp.square(jp.clip(rz - foot_z, a_min=0.0)))
-    return jp.exp(-error / 0.01)
+    reward =  jp.exp(-error / 0.01)
+    reward *= commands[3] < 0.5
+    return reward
 
   def _cost_feet_level(self, data: mjx.Data) -> jax.Array:
     # Foot pitch penalty: penalize non-level feet when under the body.
@@ -739,8 +756,11 @@ class Joystick(piplus_base.PiplusEnv):
         maxval=self._config.ang_vel_yaw[1],
     )
 
-    return jp.where(
-        jax.random.bernoulli(rng4, p=0.1),
-        jp.zeros(3),
-        jp.hstack([lin_vel_x, lin_vel_y, ang_vel_yaw]),
-    )
+    normal_cmd = jp.hstack([lin_vel_x, lin_vel_y, ang_vel_yaw, jp.zeros(1)])
+    zero_walk_cmd = jp.zeros(4)
+    stop_cmd = jp.array([0.0, 0.0, 0.0, 1.0])
+
+    # 10% stop, 10% walk-in-place, 80% normal.
+    u = jax.random.uniform(rng4)
+    cmd = jp.where(u < 0.1, stop_cmd, jp.where(u < 0.2, zero_walk_cmd, normal_cmd))
+    return cmd
