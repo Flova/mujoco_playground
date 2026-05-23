@@ -195,13 +195,13 @@
     <!-- Arms: 4438 motor, kp=6, kv=0.6, effort=10 Nm -->
     <!-- Legs: 5036 motor, effort=20 Nm, per-joint kp/kv -->
     <position name="r_hip_pitch" joint="r_hip_pitch_joint" kp="35" kv="1.1" forcerange="-20 20"/>
-    <position name="r_hip_roll" joint="r_hip_roll_joint" kp="35" kv="1.4" forcerange="-20 20"/>
+    <position name="r_hip_roll" joint="r_hip_roll_joint" kp="35" kv="1.1" forcerange="-20 20"/>
     <position name="r_thigh" joint="r_thigh_joint" kp="35" kv="1.1" forcerange="-20 20"/>
     <position name="r_calf" joint="r_calf_joint" kp="35" kv="1.1" forcerange="-20 20"/>
     <position name="r_ankle_pitch" joint="r_ankle_pitch_joint" kp="35" kv="1.1" forcerange="-20 20"/>
     <position name="r_ankle_roll" joint="r_ankle_roll_joint" kp="35" kv="1.1" forcerange="-20 20"/>
     <position name="l_hip_pitch" joint="l_hip_pitch_joint" kp="35" kv="1.1" forcerange="-20 20"/>
-    <position name="l_hip_roll" joint="l_hip_roll_joint" kp="35" kv="1.4" forcerange="-20 20"/>
+    <position name="l_hip_roll" joint="l_hip_roll_joint" kp="35" kv="1.1" forcerange="-20 20"/>
     <position name="l_thigh" joint="l_thigh_joint" kp="35" kv="1.1" forcerange="-20 20"/>
     <position name="l_calf" joint="l_calf_joint" kp="35" kv="1.1" forcerange="-20 20"/>
     <position name="l_ankle_pitch" joint="l_ankle_pitch_joint" kp="35" kv="1.1" forcerange="-20 20"/>

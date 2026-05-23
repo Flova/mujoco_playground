@@ -96,7 +96,7 @@ def default_config() -> config_dict.ConfigDict:
       ),
       lin_vel_x=[-1.0, 1.0],
       lin_vel_y=[-0.5, 0.5],
-      ang_vel_yaw=[-2.0, 2.0],
+      ang_vel_yaw=[-1.0, 1.0],
       stand_still_cmd_threshold=0.05,
   )
 
@@ -220,7 +220,11 @@ class Joystick(piplus_base.PiplusEnv):
     rng, cmd_rng = jax.random.split(rng)
     cmd = self.sample_command(cmd_rng)
 
-    phase = jp.array([-jp.pi / 2, jp.pi / 2])
+    # Per-episode joint calibration bias (2° std), added to motor reference each step.
+    rng, key = jax.random.split(rng)
+    joint_bias = jax.random.normal(key, (12,)) * (2.0 * jp.pi / 180.0)
+
+    phase = jp.array([0.0, jp.pi])
 
     # Push interval.
     rng, push_rng = jax.random.split(rng)
@@ -271,6 +275,7 @@ class Joystick(piplus_base.PiplusEnv):
         "sym_buffer": jp.zeros((_MAX_SYM_DELAY, self.mjx_model.nu)),
         "sym_cmd_buffer": jp.zeros((_MAX_SYM_DELAY, 4)),
         "half_period_steps": half_period_steps,
+        "joint_bias": joint_bias,
     }
 
     metrics = {}
@@ -313,7 +318,7 @@ class Joystick(piplus_base.PiplusEnv):
     data = state.data.replace(qvel=qvel)
     state = state.replace(data=data)
 
-    motor_targets = self._default_pose + delayed_action * self._config.action_scale
+    motor_targets = self._default_pose + state.info["joint_bias"] + delayed_action * self._config.action_scale
     data = mjx_env.step(
         self.mjx_model, state.data, motor_targets, self.n_substeps
     )
@@ -474,7 +479,7 @@ class Joystick(piplus_base.PiplusEnv):
         noisy_gyro,                                    # 3
         noisy_gravity,                                 # 3
         info["command"],                               # 4
-        noisy_joint_angles - self._default_pose,       # 12
+        noisy_joint_angles - self._default_pose - info["joint_bias"],  # 12
         noisy_joint_vel,                               # 12
         noisy_last_act,                                # 12
         phase,                                         # 4
@@ -492,7 +497,7 @@ class Joystick(piplus_base.PiplusEnv):
         gravity,                                       # 3
         linvel,                                        # 3
         global_angvel,                                 # 3
-        joint_angles - self._default_pose,             # 12
+        joint_angles - self._default_pose - info["joint_bias"],         # 12
         joint_vel,                                     # 12
         root_height,                                   # 1
         data.actuator_force,                           # 12
@@ -695,7 +700,7 @@ class Joystick(piplus_base.PiplusEnv):
     reward =  jp.exp(-error / 0.01)
     reward *= commands[3] < 0.5
     # Bump for walk in place
-    reward *= 1 + (jp.linalg.norm(commands[:3]) < 0.05)
+    reward *= 1 + (0.25 * (jp.linalg.norm(commands[:3]) < 0.05))
     return reward
 
   def _cost_feet_level(self, data: mjx.Data) -> jax.Array:
@@ -761,7 +766,7 @@ class Joystick(piplus_base.PiplusEnv):
     zero_walk_cmd = jp.zeros(4)
     stop_cmd = jp.array([0.0, 0.0, 0.0, 1.0])
 
-    # 10% stop, 10% walk-in-place, 80% normal.
+    # 5% stop, 5% walk-in-place, 90% normal.
     u = jax.random.uniform(rng4)
-    cmd = jp.where(u < 0.1, stop_cmd, jp.where(u < 0.2, zero_walk_cmd, normal_cmd))
+    cmd = jp.where(u < 0.05, stop_cmd, jp.where(u < 0.1, zero_walk_cmd, normal_cmd))
     return cmd
