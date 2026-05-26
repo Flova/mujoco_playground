@@ -46,10 +46,10 @@ def default_config() -> config_dict.ConfigDict:
           scales=config_dict.create(
               joint_pos=0.05,  # rad
               joint_vel=0.2,   # rad/s
-              gravity=0.05,
+              gravity=0.03,
               linvel=0.1,
-              gyro=0.2,
-              last_act=0.05,
+              gyro=0.1,
+              last_act=0.01,
           ),
       ),
       reward_config=config_dict.create(
@@ -65,20 +65,21 @@ def default_config() -> config_dict.ConfigDict:
               # Energy rewards.
               torques=-2.5e-3,
               action_rate=-0.01,
-              energy=-1.0e-3,
+              energy=-1.0e-4,
               # Feet rewards.
               feet_clearance=0.0,
               feet_air_time=2.0,
               feet_slip=-0.25,
               feet_height=0.0,
-              feet_phase=1.0,
+              feet_phase=1.5,
               feet_level=-5.0,
               #feet_contact_force=-0.001,
               # Other rewards.
               stand_still=0.0,
               alive=0.0,
               termination=-1.0,
-              symmetry=-0.05,
+              symmetry=-0.01,
+              foot_impact=-0.1,
               # Pose rewards.
               joint_deviation_hip=-0.0,
               joint_deviation_knee=0.0,
@@ -224,6 +225,10 @@ class Joystick(piplus_base.PiplusEnv):
     rng, key = jax.random.split(rng)
     joint_bias = jax.random.normal(key, (12,)) * (2.0 * jp.pi / 180.0)
 
+    # Per-episode IMU mounting bias in roll and pitch (0.06 rad std).
+    rng, key = jax.random.split(rng)
+    imu_bias_rp = jax.random.normal(key, (2,)) * 0.01
+
     phase = jp.array([0.0, jp.pi])
 
     # Push interval.
@@ -237,9 +242,9 @@ class Joystick(piplus_base.PiplusEnv):
 
     # IMU and action delays.
     rng, imu_rng = jax.random.split(rng)
-    max_imu_delay = 1
+    max_imu_delay = 3
     min_imu_delay = 0
-    max_action_delay = 2
+    max_action_delay = 3
     min_action_delay = 1
 
     imu_delay = jax.random.randint(
@@ -276,6 +281,7 @@ class Joystick(piplus_base.PiplusEnv):
         "sym_cmd_buffer": jp.zeros((_MAX_SYM_DELAY, 4)),
         "half_period_steps": half_period_steps,
         "joint_bias": joint_bias,
+        "imu_bias_rp": imu_bias_rp,
     }
 
     metrics = {}
@@ -426,7 +432,18 @@ class Joystick(piplus_base.PiplusEnv):
   def _get_obs(
       self, data: mjx.Data, info: dict[str, Any], contact: jax.Array
   ) -> mjx_env.Observation:
-    gyro = info["gyro_buffer"][info["imu_delay"]]
+    # IMU mounting bias rotation: Ry(pitch) @ Rx(roll).
+    roll, pitch = info["imu_bias_rp"]
+    cr, sr = jp.cos(roll), jp.sin(roll)
+    cp, sp = jp.cos(pitch), jp.sin(pitch)
+    imu_bias_rot = jp.array([
+        [cp,  sp * sr,  sp * cr],
+        [0.0, cr,      -sr     ],
+        [-sp, cp * sr,  cp * cr],
+    ])
+
+    true_gyro = info["gyro_buffer"][info["imu_delay"]]
+    gyro = imu_bias_rot @ true_gyro
     info["rng"], noise_rng = jax.random.split(info["rng"])
     noisy_gyro = (
         gyro
@@ -435,7 +452,8 @@ class Joystick(piplus_base.PiplusEnv):
         * self._config.noise_config.scales.gyro
     )
 
-    gravity = info["imu_buffer"][info["imu_delay"]].T @ jp.array([0, 0, -1])
+    true_gravity = info["imu_buffer"][info["imu_delay"]].T @ jp.array([0, 0, -1])
+    gravity = imu_bias_rot @ true_gravity
     info["rng"], noise_rng = jax.random.split(info["rng"])
     noisy_gravity = (
         gravity
@@ -454,13 +472,7 @@ class Joystick(piplus_base.PiplusEnv):
     )
 
     joint_vel = data.qvel[6:]
-    info["rng"], noise_rng = jax.random.split(info["rng"])
-    noisy_joint_vel = (
-        joint_vel
-        + jax.random.normal(noise_rng, shape=joint_vel.shape)
-        * self._config.noise_config.level
-        * self._config.noise_config.scales.joint_vel
-    )
+    noisy_joint_vel = jp.zeros_like(joint_vel)
 
     cos = jp.cos(info["phase"])
     sin = jp.sin(info["phase"])
@@ -492,12 +504,12 @@ class Joystick(piplus_base.PiplusEnv):
 
     privileged_state = jp.hstack([
         state,
-        gyro,                                          # 3
+        true_gyro,                                     # 3 (true, no bias)
         accelerometer,                                 # 3
-        gravity,                                       # 3
+        true_gravity,                                  # 3 (true, no bias)
         linvel,                                        # 3
         global_angvel,                                 # 3
-        joint_angles - self._default_pose - info["joint_bias"],         # 12
+        joint_angles - self._default_pose,                               # 12 (true, no bias/noise)
         joint_vel,                                     # 12
         root_height,                                   # 1
         data.actuator_force,                           # 12
@@ -564,6 +576,9 @@ class Joystick(piplus_base.PiplusEnv):
         "feet_level": self._cost_feet_level(data),
         #"feet_contact_force": self._cost_feet_contact_force(data, first_contact),
         "symmetry": self._cost_action_symmetry(action, info),
+        "foot_impact": self._cost_foot_impact(
+            data.sensordata[self._foot_linvel_sensor_adr], first_contact
+        ),
     }
 
   def _reward_tracking_lin_vel(
@@ -747,6 +762,13 @@ class Joystick(piplus_base.PiplusEnv):
     same_cmd = jp.all(jp.abs(delayed_cmd - info["command"]) < 1e-6)
     return error * has_data * same_cmd
 
+  def _cost_foot_impact(
+      self, feet_vel: jax.Array, first_contact: jax.Array
+  ) -> jax.Array:
+    # Penalize downward foot velocity at the moment of first ground contact.
+    foot_z_vel = feet_vel[:, 2]  # (2,); negative when foot is moving down
+    return jp.sum(jp.square(foot_z_vel) * first_contact)
+
   def sample_command(self, rng: jax.Array) -> jax.Array:
     rng1, rng2, rng3, rng4 = jax.random.split(rng, 4)
 
@@ -766,7 +788,7 @@ class Joystick(piplus_base.PiplusEnv):
     zero_walk_cmd = jp.zeros(4)
     stop_cmd = jp.array([0.0, 0.0, 0.0, 1.0])
 
-    # 5% stop, 5% walk-in-place, 90% normal.
+    # 10% stop, 10% walk-in-place, 80% normal.
     u = jax.random.uniform(rng4)
-    cmd = jp.where(u < 0.05, stop_cmd, jp.where(u < 0.1, zero_walk_cmd, normal_cmd))
+    cmd = jp.where(u < 0.1, stop_cmd, jp.where(u < 0.2, zero_walk_cmd, normal_cmd))
     return cmd
