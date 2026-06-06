@@ -60,10 +60,10 @@ def default_config() -> config_dict.ConfigDict:
               # Base rewards.
               lin_vel_z=0.0,
               ang_vel_xy=-0.15,
-              orientation=-1.0,
+              orientation=-0.8,
               base_height=0.0,
               # Energy rewards.
-              torques=-2.5e-3,
+              torques=-2.5e-4,
               action_rate=-0.01,
               energy=-1.0e-4,
               # Feet rewards.
@@ -77,9 +77,10 @@ def default_config() -> config_dict.ConfigDict:
               # Other rewards.
               stand_still=0.0,
               alive=0.0,
-              termination=-1.0,
-              symmetry=-0.01,
-              foot_impact=-0.1,
+              termination=-10.0,
+              symmetry=-0.02,
+              feet_x_symmetry=-0.05,
+              foot_impact=-0.05,
               # Pose rewards.
               joint_deviation_hip=-0.0,
               joint_deviation_knee=0.0,
@@ -87,18 +88,17 @@ def default_config() -> config_dict.ConfigDict:
               pose=-1.0,
           ),
           tracking_sigma=0.5,
-          max_foot_height=0.08,
+          max_foot_height=0.06,
           base_height_target=0.35,
       ),
       push_config=config_dict.create(
           enable=True,
           interval_range=[5.0, 10.0],
-          magnitude_range=[0.05, 2.5],
+          magnitude_range=[0.05, 1.0],
       ),
       lin_vel_x=[-1.0, 1.0],
       lin_vel_y=[-0.5, 0.5],
       ang_vel_yaw=[-1.0, 1.0],
-      stand_still_cmd_threshold=0.05,
   )
 
 
@@ -576,6 +576,7 @@ class Joystick(piplus_base.PiplusEnv):
         "feet_level": self._cost_feet_level(data),
         #"feet_contact_force": self._cost_feet_contact_force(data, first_contact),
         "symmetry": self._cost_action_symmetry(action, info),
+        "feet_x_symmetry": self._cost_feet_x_symmetry(data),
         "foot_impact": self._cost_foot_impact(
             data.sensordata[self._foot_linvel_sensor_adr], first_contact
         ),
@@ -712,10 +713,9 @@ class Joystick(piplus_base.PiplusEnv):
     foot_z = foot_pos[..., -1]
     rz = gait.get_rz(phase, swing_height=foot_height)
     error = jp.sum(jp.square(jp.clip(rz - foot_z, a_min=0.0)))
-    reward =  jp.exp(-error / 0.01)
+    walk_in_place = jp.linalg.norm(commands[:3]) < 0.05
+    reward = jp.exp(-error / 0.01) * (1.0 + 0.25 * walk_in_place)
     reward *= commands[3] < 0.5
-    # Bump for walk in place
-    reward *= 1 + (0.25 * (jp.linalg.norm(commands[:3]) < 0.05))
     return reward
 
   def _cost_feet_level(self, data: mjx.Data) -> jax.Array:
@@ -761,6 +761,15 @@ class Joystick(piplus_base.PiplusEnv):
     # Suppress penalty if the command changed between the delayed and current step.
     same_cmd = jp.all(jp.abs(delayed_cmd - info["command"]) < 1e-6)
     return error * has_data * same_cmd
+
+  def _cost_feet_x_symmetry(self, data: mjx.Data) -> jax.Array:
+    # In a symmetric gait, right foot x + left foot x ≈ 0 in the local body frame.
+    body_pos = data.qpos[:3]
+    body_xmat = data.xmat[self._torso_body_id].reshape(3, 3)
+    foot_pos = data.site_xpos[self._feet_site_id]  # (2, 3) world frame
+    foot_pos_local = (body_xmat.T @ (foot_pos - body_pos).T).T  # (2, 3)
+    foot_x = foot_pos_local[:, 0]  # forward/backward per foot
+    return jp.square(foot_x[0] + foot_x[1])
 
   def _cost_foot_impact(
       self, feet_vel: jax.Array, first_contact: jax.Array
