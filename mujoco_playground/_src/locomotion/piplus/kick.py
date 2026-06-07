@@ -52,27 +52,28 @@ def default_config() -> config_dict.ConfigDict:
               linvel=0.1,
               gyro=0.2,
               last_act=0.05,
-              ball_pos=0.03,    # m
+              ball_pos=0.02,    # m
           ),
       ),
       reward_config=config_dict.create(
           scales=config_dict.create(
               # Kick rewards.
-              lin_vel_x=0.7,
+              lin_vel_x=0.0,
+              move_to_ball=1.0,
               stop_for_kick=0.0,
               orient_to_ball=0.5,
               ball_proximity=0.0,
               ball_height=0.3,
               ball_travel=0.0,
-              ball_speed=1.0,
+              ball_speed=10.0,
               kick_foot_velocity=0.0,
               kick_motion=0.0,
-              kick_direction=1.0,
-              kick_dir_bonus=1.0,
+              kick_dir_bonus=0.0,
               ball_too_fast=0.0,
-              orient_to_kick_dir=0.8,
+              orient_to_kick_dir=0.3,
               sidestep=0.3,
-              wrong_approach=-0.2,
+              aligned_approach=0.5,
+              wrong_approach=-0.1,
               too_fast=-2.0,
               symmetry=-0.05,
               # Base rewards.
@@ -81,19 +82,19 @@ def default_config() -> config_dict.ConfigDict:
               orientation=-1.0,
               base_height=0.0,
               # Energy rewards.
-              torques=-2.5e-3,
-              action_rate=-0.01,
-              energy=-1.0e-3,
+              torques=-1.0e-3,
+              action_rate=-0.02,
+              energy=-2.0e-3,
               # Feet rewards.
               feet_clearance=0.0,
-              feet_air_time=2.0,
+              feet_air_time=4.0,
               feet_slip=-0.25,
               feet_height=0.0,
-              feet_phase=0.8,
-              feet_level=-5.0,
+              feet_phase=1.0,
+              feet_level=-10.0,
               # Other rewards.
               alive=0.0,
-              termination=-1.0,
+              termination=-10.0,
               stand_still=0.0,
               joint_deviation_hip=0.0,
               joint_deviation_knee=0.0,
@@ -107,10 +108,10 @@ def default_config() -> config_dict.ConfigDict:
       push_config=config_dict.create(
           enable=True,
           interval_range=[5.0, 10.0],
-          magnitude_range=[0.05, 2.5],
+          magnitude_range=[0.05, 1.0],
       ),
       ball_distance=[0.25, 0.4],
-      too_fast_threshold=0.5,
+      too_fast_threshold=0.7,
   )
 
 
@@ -269,9 +270,13 @@ class Kick(piplus_base.PiplusEnv):
     rng, key = jax.random.split(rng)
     joint_bias = jax.random.normal(key, (12,)) * (2.0 * jp.pi / 180.0)
 
+    # Per-episode IMU mounting bias in roll and pitch (0.01 rad std).
+    rng, key = jax.random.split(rng)
+    imu_bias_rp = jax.random.normal(key, (2,)) * 0.01
+
     # Max ball speed command [0.3, 5] m/s – robot must keep ball under this.
     rng, key = jax.random.split(rng)
-    max_ball_speed = jax.random.uniform(key, minval=0.3, maxval=1.5)
+    max_ball_speed = jax.random.uniform(key, minval=0.3, maxval=3.0)
 
     # Ball observation delay: up to _MAX_BALL_DELAY steps (0.2 s).
     rng, key = jax.random.split(rng)
@@ -352,6 +357,7 @@ class Kick(piplus_base.PiplusEnv):
         "sym_buffer": jp.zeros((_MAX_SYM_DELAY, self.mjx_model.nu)),
         "half_period_steps": half_period_steps,
         "joint_bias": joint_bias,
+        "imu_bias_rp": imu_bias_rp,
         "max_ball_speed": max_ball_speed,
         "ball_obs_delay": ball_obs_delay,
         "ball_pos_buffer": jp.zeros((_MAX_BALL_DELAY + 1, 2)),
@@ -418,11 +424,13 @@ class Kick(piplus_base.PiplusEnv):
     data = mjx_env.step(ball_mjx_model, state.data, motor_targets, self.n_substeps)
     state.info["motor_targets"] = motor_targets
 
-    # Resample kick direction at random intervals.
+    # Resample kick direction at random intervals, but not while the ball is moving.
+    ball_speed = jp.linalg.norm(data.sensordata[self._ball_linvel_sensor_adr])
+    ball_stationary = ball_speed < 0.05
     should_resample = (
         jp.mod(state.info["kick_resample_step"] + 1,
                state.info["kick_resample_interval_steps"]) == 0
-    )
+    ) & ball_stationary
     state.info["rng"], key1, key2 = jax.random.split(state.info["rng"], 3)
     new_angle = jax.random.uniform(key1, minval=0.0, maxval=2 * jp.pi)
     new_dir = jp.array([jp.cos(new_angle), jp.sin(new_angle)])
@@ -559,7 +567,20 @@ class Kick(piplus_base.PiplusEnv):
   def _get_obs(
       self, data: mjx.Data, info: dict[str, Any], contact: jax.Array
   ) -> mjx_env.Observation:
-    gyro = info["gyro_buffer"][info["imu_delay"]]
+    true_gyro = info["gyro_buffer"][info["imu_delay"]]
+    true_gravity = info["imu_buffer"][info["imu_delay"]].T @ jp.array([0, 0, -1])
+
+    roll, pitch = info["imu_bias_rp"]
+    cr, sr = jp.cos(roll), jp.sin(roll)
+    cp, sp = jp.cos(pitch), jp.sin(pitch)
+    imu_bias_rot = jp.array([
+        [cp,  sp * sr,  sp * cr],
+        [0.0, cr,       -sr    ],
+        [-sp, cp * sr,  cp * cr],
+    ])
+    gyro = imu_bias_rot @ true_gyro
+    gravity = imu_bias_rot @ true_gravity
+
     info["rng"], noise_rng = jax.random.split(info["rng"])
     noisy_gyro = (
         gyro
@@ -568,7 +589,6 @@ class Kick(piplus_base.PiplusEnv):
         * self._config.noise_config.scales.gyro
     )
 
-    gravity = info["imu_buffer"][info["imu_delay"]].T @ jp.array([0, 0, -1])
     info["rng"], noise_rng = jax.random.split(info["rng"])
     noisy_gravity = (
         gravity
@@ -613,10 +633,14 @@ class Kick(piplus_base.PiplusEnv):
         * self._config.noise_config.scales.ball_pos
     )
 
-    # Kick direction in robot local frame (command, no noise).
+    # Kick direction in robot local frame with angular noise (10° std).
     torso_mat = data.site_xmat[self._site_id].reshape(3, 3)
     kick_dir_world_3d = jp.concatenate([info["kick_dir_world"], jp.zeros(1)])
-    kick_dir_local = (torso_mat.T @ kick_dir_world_3d)[:2]
+    true_kick_dir_local = (torso_mat.T @ kick_dir_world_3d)[:2]
+    info["rng"], noise_rng = jax.random.split(info["rng"])
+    angle_noise = jax.random.normal(noise_rng) * (10.0 * jp.pi / 180.0)
+    c, s = jp.cos(angle_noise), jp.sin(angle_noise)
+    kick_dir_local = jp.array([[c, -s], [s, c]]) @ true_kick_dir_local
 
     noisy_last_act = (
         info["last_act"]
@@ -630,7 +654,6 @@ class Kick(piplus_base.PiplusEnv):
         noisy_gyro,                                                        # 3
         noisy_gravity,                                                     # 3
         noisy_joint_angles - self._default_pose - info["joint_bias"],      # 12
-        noisy_joint_vel,                                                   # 12
         noisy_last_act,                                                    # 12
         phase,                                                             # 4
         kick_dir_local,                                                    # 2
@@ -648,9 +671,11 @@ class Kick(piplus_base.PiplusEnv):
         state,
         ball_vel,                                                          # 1
         true_ball_pos_local,                                               # 2 (true, no delay/blackout)
-        gyro,                                                              # 3
+        true_kick_dir_local,                                               # 2 (true, no angle noise)
+        data.site_xpos[self._ball_site_id][2:3],                           # 1 (ball height)
+        true_gyro,                                                         # 3
         accelerometer,                                                     # 3
-        gravity,                                                           # 3
+        true_gravity,                                                      # 3
         linvel,                                                            # 3
         global_angvel,                                                     # 3
         joint_angles - self._default_pose,                                 # 12 (true, no bias/noise)
@@ -681,6 +706,7 @@ class Kick(piplus_base.PiplusEnv):
     speed = jp.linalg.norm(linvel[:2])
     return {
         "lin_vel_x": speed * (speed <= self._config.too_fast_threshold),
+        "move_to_ball": self._reward_move_to_ball(ball_pos_local, linvel),
         "too_fast": (speed > self._config.too_fast_threshold).astype(jp.float32),
         "stop_for_kick": self._reward_stop_for_kick(
             info["reached_ball"], linvel
@@ -698,16 +724,17 @@ class Kick(piplus_base.PiplusEnv):
         "ball_speed": self._reward_ball_speed(
             data.sensordata[self._ball_linvel_sensor_adr],
             info["max_ball_speed"],
+            info,
         ),
         "ball_too_fast": jp.zeros(()),
         "kick_foot_velocity": self._reward_kick_foot_velocity(
             data.sensordata[self._foot_linvel_sensor_adr].ravel(),
             info["reached_ball"],
         ),
-        "kick_direction": self._reward_kick_direction(data, info),
         "kick_dir_bonus": self._reward_kick_dir_bonus(data, info),
         "orient_to_kick_dir": self._reward_orient_to_kick_dir(data, info),
         "sidestep": self._reward_sidestep(data, info, ball_pos_local, linvel),
+        "aligned_approach": self._reward_aligned_approach(data, info, linvel),
         "wrong_approach": self._cost_wrong_approach(data, info),
         "kick_motion": self._reward_kick_motion(
             info["reached_ball"], info["phase"], data.qpos[7:19]
@@ -749,6 +776,13 @@ class Kick(piplus_base.PiplusEnv):
 
   # --- Kick rewards ---
 
+  def _reward_move_to_ball(
+      self, ball_pos_local: jax.Array, linvel: jax.Array
+  ) -> jax.Array:
+    ball_dir = ball_pos_local / (jp.linalg.norm(ball_pos_local) + 1e-6)
+    speed_toward = jp.dot(linvel[:2], ball_dir)
+    return jp.clip(speed_toward / self._config.too_fast_threshold, 0.0, 1.0)
+
   def _reward_orient_to_ball(self, ball_pos_local: jax.Array) -> jax.Array:
     ball_angle = jp.arctan2(ball_pos_local[1], ball_pos_local[0])
     return jp.exp(-jp.abs(ball_angle))
@@ -767,9 +801,19 @@ class Kick(piplus_base.PiplusEnv):
   ) -> jax.Array:
     return jp.linalg.norm(ball_pos - initial_ball_pos)
 
-  def _reward_ball_speed(self, ball_linvel: jax.Array, max_ball_speed: jax.Array) -> jax.Array:
+  def _reward_ball_speed(
+      self, ball_linvel: jax.Array, max_ball_speed: jax.Array, info: dict
+  ) -> jax.Array:
+    """Speed-scaled reward when ball moves in kick dir; fixed -1 penalty when wrong dir."""
     speed = jp.linalg.norm(ball_linvel)
-    return jp.minimum(speed / max_ball_speed, 1.0)
+    xy_speed = jp.linalg.norm(ball_linvel[:2])
+    cos_angle = jp.dot(ball_linvel[:2], info["kick_dir_world"]) / (xy_speed + 1e-6)
+    cos_threshold = jp.cos(jp.array(15.0 * jp.pi / 180.0))
+    moving = speed > 0.05
+    correct_dir = cos_angle > cos_threshold
+    speed_reward = jp.minimum(speed / max_ball_speed, 1.0) ** 2
+    reward = jp.where(correct_dir, speed_reward, -0.05)
+    return reward * moving
 
   def _reward_kick_foot_velocity(
       self, foot_vels: jax.Array, reached_ball: jax.Array
@@ -791,15 +835,6 @@ class Kick(piplus_base.PiplusEnv):
     within_angle = cos_angle > jp.cos(jp.array(5.0 * jp.pi / 180.0))
     return (moving_fast_enough & within_angle).astype(jp.float32)
 
-  def _reward_kick_direction(
-      self, data: mjx.Data, info: dict[str, Any]
-  ) -> jax.Array:
-    """Ball speed squared in the commanded direction; zero if ball moves the wrong way."""
-    ball_vel = data.sensordata[self._ball_linvel_sensor_adr]
-    kick_dir = jp.concatenate([info["kick_dir_world"], jp.zeros(1)])
-    proj = jp.clip(jp.dot(ball_vel, kick_dir), 0.0, None)
-    return jp.square(proj)
-
   def _reward_orient_to_kick_dir(
       self, data: mjx.Data, info: dict[str, Any]
   ) -> jax.Array:
@@ -820,29 +855,49 @@ class Kick(piplus_base.PiplusEnv):
   ) -> jax.Array:
     """Reward lateral movement near the ball when not yet aligned with kick dir."""
     dist = jp.linalg.norm(ball_pos_local)
-    in_circle = dist < 0.5
+    in_circle = (dist > 0.35) & (dist < 0.58)
     torso_mat = data.site_xmat[self._site_id].reshape(3, 3)
     fwd_xy = torso_mat[:2, 0] / (jp.linalg.norm(torso_mat[:2, 0]) + 1e-6)
     not_aligned = jp.dot(fwd_xy, info["kick_dir_world"]) < jp.cos(
         jp.array(10.0 * jp.pi / 180.0)
     )
-    lateral_speed = jp.minimum(jp.abs(linvel[1]) / 0.2, 1.0)
-    return lateral_speed * in_circle * not_aligned
+    # Signed heading error: positive = kick dir is to robot's left.
+    cross = fwd_xy[0] * info["kick_dir_world"][1] - fwd_xy[1] * info["kick_dir_world"][0]
+    correct_lateral = -jp.sign(cross) * linvel[1]
+    lateral_speed = jp.minimum(jp.clip(correct_lateral, 0.0, None) / 0.2, 1.0)
+    facing_ball = jp.abs(jp.arctan2(ball_pos_local[1], ball_pos_local[0])) < jp.array(45.0 * jp.pi / 180.0)
+    return lateral_speed * in_circle * not_aligned * facing_ball
+
+  def _reward_aligned_approach(
+      self,
+      data: mjx.Data,
+      info: dict[str, Any],
+      linvel: jax.Array,
+  ) -> jax.Array:
+    """Small reward for moving forward when aligned with both kick direction and ball."""
+    ball_pos_local = self._get_ball_pos_local(data)
+    torso_mat = data.site_xmat[self._site_id].reshape(3, 3)
+    fwd_xy = torso_mat[:2, 0] / (jp.linalg.norm(torso_mat[:2, 0]) + 1e-6)
+    cos_threshold = jp.cos(jp.array(45.0 * jp.pi / 180.0))
+    facing_kick = jp.dot(fwd_xy, info["kick_dir_world"]) > cos_threshold
+    facing_ball = jp.abs(jp.arctan2(ball_pos_local[1], ball_pos_local[0])) < jp.array(45.0 * jp.pi / 180.0)
+    forward_speed = jp.clip(linvel[0] / self._config.too_fast_threshold, 0.0, 1.0)
+    return forward_speed * (facing_kick & facing_ball).astype(jp.float32)
 
   def _cost_wrong_approach(
       self, data: mjx.Data, info: dict[str, Any]
   ) -> jax.Array:
-    """Penalty for approaching within 0.5 m while not aligned within 10° of kick dir."""
-    dist = jp.linalg.norm(self._get_ball_pos_local(data))
+    """Penalty outside 0.4–0.6 m sweet spot when not facing kick dir AND not facing ball."""
+    ball_pos_local = self._get_ball_pos_local(data)
+    dist = jp.linalg.norm(ball_pos_local)
     torso_mat = data.site_xmat[self._site_id].reshape(3, 3)
-    fwd_xy = torso_mat[:2, 0]
-    fwd_xy = fwd_xy / (jp.linalg.norm(fwd_xy) + 1e-6)
-    cos_angle = jp.dot(fwd_xy, info["kick_dir_world"])
-    cos_threshold = jp.cos(jp.array(10.0 * jp.pi / 180.0))
-    not_facing = cos_angle < cos_threshold
-    too_close = dist < 0.5
-    too_far = dist > 0.8
-    return ((too_close | too_far) & not_facing).astype(jp.float32)
+    fwd_xy = torso_mat[:2, 0] / (jp.linalg.norm(torso_mat[:2, 0]) + 1e-6)
+    cos_threshold = jp.cos(jp.array(45.0 * jp.pi / 180.0))
+    not_facing_kick = jp.dot(fwd_xy, info["kick_dir_world"]) < cos_threshold
+    ball_angle = jp.arctan2(ball_pos_local[1], ball_pos_local[0])
+    not_facing_ball = jp.abs(ball_angle) > jp.array(45.0 * jp.pi / 180.0)
+    in_sweet_spot = (dist > 0.35) & (dist < 0.58)
+    return (~in_sweet_spot & (not_facing_kick | not_facing_ball)).astype(jp.float32)
 
   def _reward_stop_for_kick(
       self, reached_ball: jax.Array, lin_vel: jax.Array
@@ -1026,7 +1081,7 @@ class Kick(piplus_base.PiplusEnv):
   def _reached_ball(self, ball_pos_local: jax.Array) -> jax.Array:
     dist = jp.linalg.norm(ball_pos_local)
     angle = jp.arctan2(ball_pos_local[1], ball_pos_local[0])
-    return jp.logical_and(dist < 0.5, jp.abs(angle) < jp.pi / 4)
+    return jp.logical_and(dist < 0.35, jp.abs(angle) < jp.pi / 4)
 
   def _sample_ball_position(
       self, rng: jax.Array, yaw: jax.Array

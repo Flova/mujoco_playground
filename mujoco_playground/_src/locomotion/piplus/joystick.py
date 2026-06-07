@@ -48,7 +48,7 @@ def default_config() -> config_dict.ConfigDict:
               joint_vel=0.2,   # rad/s
               gravity=0.03,
               linvel=0.1,
-              gyro=0.1,
+              gyro=0.05,
               last_act=0.01,
           ),
       ),
@@ -242,7 +242,7 @@ class Joystick(piplus_base.PiplusEnv):
 
     # IMU and action delays.
     rng, imu_rng = jax.random.split(rng)
-    max_imu_delay = 3
+    max_imu_delay = 2
     min_imu_delay = 0
     max_action_delay = 3
     min_action_delay = 1

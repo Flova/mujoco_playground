@@ -50,6 +50,8 @@ def export_onnx(params, ppo_params, env, out_path: Path):
     import tf2onnx
     import onnxruntime as rt
     from tensorflow.keras import layers
+    # ONNX export only needs a CPU forward pass; avoid GPU kernel issues.
+    tf.config.set_visible_devices([], "GPU")
 
     obs_size = env.observation_size["state"][0]
     act_size = env.action_size
@@ -132,6 +134,22 @@ def render_video(make_inference_fn, params, env_name, env_cfg, out_path: Path, s
     frames = eval_env.render(
         traj, camera="track", height=480, width=640, scene_option=scene_option
     )
+
+    if traj and "max_ball_speed" in traj[0].info:
+        from PIL import Image, ImageDraw, ImageFont
+        try:
+            font = ImageFont.load_default(size=20)
+        except TypeError:
+            font = ImageFont.load_default()
+        annotated = []
+        for frame, s in zip(frames, traj):
+            speed = float(s.info["max_ball_speed"])
+            img = Image.fromarray(frame)
+            draw = ImageDraw.Draw(img)
+            draw.text((10, 10), f"max kick speed: {speed:.2f} m/s", fill=(0, 0, 0), font=font)
+            annotated.append(np.array(img))
+        frames = annotated
+
     media.write_video(str(out_path), frames, fps=fps)
     print(f"Video saved → {out_path}  ({len(frames)} frames @ {fps:.0f} fps)")
 
@@ -146,6 +164,12 @@ def main():
         ppo_params.num_timesteps = args.timesteps
     if args.num_envs is not None:
         ppo_params.num_envs = args.num_envs
+
+    # Derive curriculum_steps from total training budget so the cone finishes
+    # narrowing exactly at the end of training.
+    if hasattr(env_cfg, "curriculum_steps"):
+        num_envs = ppo_params.get("num_envs", 4096)
+        env_cfg.curriculum_steps = ppo_params.num_timesteps // num_envs
 
     # Output directory.
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -212,7 +236,7 @@ def main():
             print(f"ONNX export skipped (missing dep): {e}")
 
     if not args.no_video:
-        for i in range(5):
+        for i in range(10):
             render_video(make_inference_fn, params, args.env, env_cfg,
                          outdir / f"rollout_{i}.mp4", seed=i)
 

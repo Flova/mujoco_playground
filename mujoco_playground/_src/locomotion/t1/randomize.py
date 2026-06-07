@@ -67,10 +67,10 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
         + jax.random.uniform(key, shape=(23,), minval=-0.05, maxval=0.05)
     )
 
-    # Joint stiffness: *U(0.9, 1.1).
+    # Joint stiffness: *U(0.95, 1.05).
     rng, key = jax.random.split(rng)
     kp = model.actuator_gainprm[:, 0] * jax.random.uniform(
-        key, (model.nu,), minval=0.9, maxval=1.1
+        key, (model.nu,), minval=0.95, maxval=1.05
     )
     actuator_gainprm = model.actuator_gainprm.at[:, 0].set(kp)
     actuator_biasprm = model.actuator_biasprm.at[:, 1].set(-kp)
