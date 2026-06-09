@@ -119,6 +119,7 @@ def brax_ppo_config(env_name: str) -> config_dict.ConfigDict:
     )
 
   elif env_name in (
+      "K1KickFlatTerrain",
       "PiplusJoystickFlatTerrain",
       "PiplusJoystickRoughTerrain",
       "PiplusKickFlatTerrain",
